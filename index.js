@@ -7,7 +7,7 @@ import { google } from "googleapis";
 dotenv.config();
 
 const app = express();
-const db = new Database("purevision.db");
+const db = new Database(process.env.DB_PATH || "purevision.db");
 
 // ─── DATABASE SETUP ───────────────────────────────────────────────────────────
 db.exec(`
