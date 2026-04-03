@@ -233,13 +233,13 @@ app.post("/webhook/ghl/:shopId", async (req, res) => {
   console.log(`[${shopId}] Lead stored — DB id: ${leadId}`);
 
   res.status(200).json({ received: true, leadId });
+if (process.env.CALLS_ENABLED === "true") {
 
-  try {
     const callResult = await triggerRetellCall(lead, shop);
     console.log(`[${shopId}] Retell call triggered:`, callResult.call_id);
     db.prepare(`UPDATE leads SET call_id = ?, call_status = 'calling' WHERE id = ?`)
       .run(callResult.call_id, leadId);
-  } catch (err) {
+  } else {
     console.error(`[${shopId}] Failed to trigger Retell call:`, err.message);
     db.prepare(`UPDATE leads SET call_status = 'call_failed' WHERE id = ?`)
       .run(leadId);
