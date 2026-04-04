@@ -246,6 +246,132 @@ if (process.env.CALLS_ENABLED === "true") {
   }
 });
 
+// ─── ROUTE: META FACEBOOK LEAD ADS WEBHOOK ───────────────────────────────────
+
+// GET — Meta verification handshake (required to activate webhook)
+app.get("/webhook/meta", (req, res) => {
+  const VERIFY_TOKEN = process.env.META_VERIFY_TOKEN;
+
+  const mode      = req.query["hub.mode"];
+  const token     = req.query["hub.verify_token"];
+  const challenge = req.query["hub.challenge"];
+
+  console.log("[Meta] Verification request received");
+
+  if (mode === "subscribe" && token === VERIFY_TOKEN) {
+    console.log("[Meta] Webhook verified successfully");
+    return res.status(200).send(challenge);
+  }
+
+  console.error("[Meta] Verification failed — token mismatch");
+  res.sendStatus(403);
+});
+
+// POST — Meta sends lead data here
+app.post("/webhook/meta", async (req, res) => {
+  console.log("\n[Meta] Webhook received:", JSON.stringify(req.body, null, 2));
+
+  // Acknowledge Meta immediately — they expect a fast 200
+  res.status(200).send("EVENT_RECEIVED");
+
+  try {
+    const entries = req.body.entry || [];
+
+    for (const entry of entries) {
+      const changes = entry.changes || [];
+
+      for (const change of changes) {
+        if (change.field !== "leadgen") continue;
+
+        const leadgenId = change.value?.leadgen_id;
+        const pageId    = change.value?.page_id;
+        const formId    = change.value?.form_id;
+
+        console.log(`[Meta] New lead — leadgen_id: ${leadgenId}`);
+
+        // Fetch full lead details from Meta Graph API
+        const leadData = await fetchMetaLead(leadgenId);
+
+        if (!leadData) {
+          console.error("[Meta] Could not fetch lead data");
+          continue;
+        }
+
+        // Store the lead
+        const result = db.prepare(`
+          INSERT INTO leads (shop_id, lead_name, lead_phone, lead_vehicle, lead_special)
+          VALUES (?, ?, ?, ?, ?)
+        `).run(
+          "pure-vision-tints",
+          leadData.name    || "there",
+          leadData.phone   || null,
+          leadData.vehicle || "your vehicle",
+          leadData.special || "Ceramic Special"
+        );
+
+        const leadId = result.lastInsertRowid;
+        console.log(`[Meta] Lead stored — id: ${leadId}, name: ${leadData.name}, phone: ${leadData.phone}`);
+
+        // Trigger call if enabled
+        if (process.env.CALLS_ENABLED === "true" && leadData.phone) {
+          const shop = SHOP_CONFIGS["pure-vision-tints"];
+          try {
+            const callResult = await triggerRetellCall({
+              leadName:    leadData.name,
+              leadPhone:   leadData.phone,
+              leadVehicle: leadData.vehicle || "your vehicle",
+              leadSpecial: leadData.special || "Ceramic Special",
+            }, shop);
+
+            db.prepare(`UPDATE leads SET call_id = ?, call_status = 'calling' WHERE id = ?`)
+              .run(callResult.call_id, leadId);
+
+            console.log(`[Meta] Call triggered for ${leadData.name}`);
+          } catch (err) {
+            console.error(`[Meta] Call failed:`, err.message);
+          }
+        }
+      }
+    }
+  } catch (err) {
+    console.error("[Meta] Processing error:", err.message);
+  }
+});
+
+// ─── UTILITY: FETCH LEAD DATA FROM META GRAPH API ────────────────────────────
+async function fetchMetaLead(leadgenId) {
+  try {
+    const response = await fetch(
+      `https://graph.facebook.com/v19.0/${leadgenId}?access_token=${process.env.META_PAGE_ACCESS_TOKEN}`
+    );
+
+    const data = await response.json();
+    console.log("[Meta] Raw lead data:", JSON.stringify(data, null, 2));
+
+    if (!data.field_data) return null;
+
+    // Map Meta field names to your standard fields
+    // Field names depend on what your roommate named them in the lead form
+    const fields = {};
+    data.field_data.forEach(field => {
+      fields[field.name.toLowerCase()] = field.values?.[0];
+    });
+
+    console.log("[Meta] Parsed fields:", fields);
+
+    return {
+      name:    fields["full_name"]    || fields["name"]    || null,
+      phone:   fields["phone_number"] || fields["phone"]   || null,
+      vehicle: fields["vehicle"]      || fields["car"]     || null,
+      special: fields["special"]      || fields["service"] || "Ceramic Special",
+    };
+
+  } catch (err) {
+    console.error("[Meta] Error fetching lead:", err.message);
+    return null;
+  }
+}
+
 // ─── ROUTE: RETELL CALL OUTCOME WEBHOOK ──────────────────────────────────────
 app.post("/webhook/retell/call-ended", async (req, res) => {
   console.log("\n[Retell] Raw payload:", JSON.stringify(req.body, null, 2));
