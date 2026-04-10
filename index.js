@@ -36,10 +36,10 @@ const SHOP_CONFIGS = {
     webhookSecret: process.env.GHL_WEBHOOK_SECRET,
     retellAgentId: process.env.RETELL_AGENT_ID,
     fieldMapping: {
-      leadName:    "contact_name",
+      leadName:    "first_name",
       leadPhone:   "phone",
-      leadVehicle: "vehicle",
-      leadSpecial: "special",
+      leadVehicle: "Vehicle Information",
+      leadSpecial: "lead_special_override", // handled separately below
     },
   },
 };
@@ -152,11 +152,27 @@ async function triggerRetellCall(lead, shop) {
 
 // ─── UTILITY: MAP GHL PAYLOAD → STANDARD LEAD ────────────────────────────────
 function mapLead(payload, fieldMapping) {
+  // Detect special from form name or payload
+  let leadSpecial = "Ceramic Special";
+  
+  const formName = payload["name"] || 
+                   payload?.workflow?.lastAttributionSource?.formName || 
+                   "";
+  
+  if (formName.toLowerCase().includes("199") || 
+      formName.toLowerCase().includes("carbon")) {
+    leadSpecial = "Carbon Special";
+  } else if (formName.toLowerCase().includes("299") || 
+             formName.toLowerCase().includes("295") ||
+             formName.toLowerCase().includes("ceramic")) {
+    leadSpecial = "Ceramic Special";
+  }
+
   return {
     leadName:    payload[fieldMapping.leadName]    || "there",
     leadPhone:   payload[fieldMapping.leadPhone]   || null,
     leadVehicle: payload[fieldMapping.leadVehicle] || "your vehicle",
-    leadSpecial: payload[fieldMapping.leadSpecial] || "Ceramic Special",
+    leadSpecial: leadSpecial,
   };
 }
 
