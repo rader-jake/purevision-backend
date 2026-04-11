@@ -62,8 +62,10 @@ const gcal = google.calendar({ version: "v3", auth: googleAuth });
 // ─── APPOINTMENT SLOTS ────────────────────────────────────────────────────────
 const APPOINTMENT_SLOTS = [
   { label: "9AM",  hour: 9  },
-  { label: "12PM", hour: 12 },
+  { label: "11AM", hour: 11 },
+  { label: "1PM", hour: 13 },
   { label: "3PM",  hour: 15 },
+  { label: "5PM", hour: 17 },
 ];
 
 // ─── UTILITIES ────────────────────────────────────────────────────────────────
@@ -86,19 +88,86 @@ async function bookGoogleCalendarEvent(lead) {
   if (isNaN(appointmentDate.getTime())) {
     throw new Error(`Could not parse appointment time: ${lead.booked_at}`);
   }
+  // Handle both lead.lead_name and lead.name formats
+  const name    = lead.lead_name    || lead.name    || "Customer";
+  const vehicle = lead.lead_vehicle || lead.vehicle || "Vehicle";
+  const special = lead.lead_special || lead.special || "Tint Special";
+  const phone   = lead.lead_phone   || lead.phone   || "";
+
   const endDate = new Date(appointmentDate.getTime() + 2 * 60 * 60 * 1000);
+
   const event = await gcal.events.insert({
     calendarId: process.env.GOOGLE_CALENDAR_ID,
     requestBody: {
-      summary:     `Tint Appointment — ${lead.lead_name}`,
-      description: `Vehicle: ${lead.lead_vehicle}\nSpecial: ${lead.lead_special}\nPhone: ${lead.lead_phone}\nDeposit: PAID`,
+      summary:     `Tint Appointment — ${name}`,
+      description: `Vehicle: ${vehicle}\nSpecial: ${special}\nPhone: ${phone}`,
       start: { dateTime: appointmentDate.toISOString(), timeZone: "America/Chicago" },
       end:   { dateTime: endDate.toISOString(),         timeZone: "America/Chicago" },
     },
   });
+
   console.log(`[Calendar] Event created: ${event.data.htmlLink}`);
   return event.data;
 }
+
+// ─── ROUTE: BOOK APPOINTMENT DIRECTLY ────────────────────────────────────────
+// Called by Retell when customer confirms appointment time
+// Replaces deposit-triggered booking while SMS/Square is disabled
+app.post("/tools/book-appointment", async (req, res) => {
+  console.log("\n[Book Tool] Called with:", JSON.stringify(req.body, null, 2));
+
+  const raw              = req.body;
+  const args             = raw.args || raw;
+  const lead_name        = args.lead_name;
+  const lead_phone       = args.lead_phone;
+  const lead_vehicle     = args.lead_vehicle;
+  const lead_special     = args.lead_special;
+  const appointment_time = args.appointment_time;
+
+  console.log("[Book Tool] Resolved:", { lead_name, lead_phone, appointment_time });
+
+  if (!appointment_time) {
+    return res.json({
+      response: "I wasn't able to lock in that time. Can you confirm the day and time again?",
+      success: false,
+    });
+  }
+
+  try {
+    // Update lead in DB with appointment time
+    db.prepare(`
+      UPDATE leads
+      SET booked_at = ?, call_status = 'booked'
+      WHERE lead_phone = ?
+    `).run(appointment_time, lead_phone);
+
+    // Build a fake lead object for calendar booking
+    const lead = {
+      lead_name:    lead_name    || "Customer",
+      lead_phone:   lead_phone   || "",
+      lead_vehicle: lead_vehicle || "your vehicle",
+      lead_special: lead_special || "Ceramic Special",
+      booked_at:    appointment_time,
+    };
+
+    // Book Google Calendar
+    await bookGoogleCalendarEvent(lead);
+
+    console.log(`[Book Tool] Appointment booked — ${lead_name} at ${appointment_time}`);
+
+    return res.json({
+      response: `Perfect, you're all set! I've got you down for ${appointment_time}. We look forward to taking care of your ${lead_vehicle || "vehicle"} — see you then!`,
+      success: true,
+    });
+
+  } catch (err) {
+    console.error("[Book Tool] Error:", err.message);
+    return res.json({
+      response: `You're confirmed for ${appointment_time}. We look forward to seeing you!`,
+      success: true,
+    });
+  }
+});
 
 async function triggerRetellCall(lead, shop) {
   const response = await fetch("https://api.retellai.com/v2/create-phone-call", {
