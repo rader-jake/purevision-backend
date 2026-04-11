@@ -39,7 +39,7 @@ const SHOP_CONFIGS = {
       leadName:    "first_name",
       leadPhone:   "phone",
       leadVehicle: "Vehicle Information",
-      leadSpecial: "lead_special_override", // handled separately below
+      leadSpecial: "lead_special_override",
     },
   },
 };
@@ -59,23 +59,18 @@ const googleAuth = new google.auth.JWT({
 
 const gcal = google.calendar({ version: "v3", auth: googleAuth });
 
-// ─── YOUR ROOMMATE'S APPOINTMENT SLOTS ───────────────────────────────────────
-// Update these if the schedule ever changes
+// ─── APPOINTMENT SLOTS ────────────────────────────────────────────────────────
 const APPOINTMENT_SLOTS = [
   { label: "9AM",  hour: 9  },
   { label: "12PM", hour: 12 },
   { label: "3PM",  hour: 15 },
 ];
 
-// ─── UTILITY: GET DATE STRING IN CENTRAL TIME ─────────────────────────────────
-// Returns "2026-04-03" for any date, in Houston/Central timezone
+// ─── UTILITIES ────────────────────────────────────────────────────────────────
 function getCentralDateString(date) {
-  return date.toLocaleDateString("en-CA", {
-    timeZone: "America/Chicago",
-  });
+  return date.toLocaleDateString("en-CA", { timeZone: "America/Chicago" });
 }
 
-// ─── UTILITY: GET HOUR IN CENTRAL TIME FROM A DATE ───────────────────────────
 function getCentralHour(date) {
   return parseInt(
     date.toLocaleString("en-US", {
@@ -86,39 +81,25 @@ function getCentralHour(date) {
   );
 }
 
-// ─── UTILITY: BOOK GOOGLE CALENDAR EVENT ─────────────────────────────────────
 async function bookGoogleCalendarEvent(lead) {
   const appointmentDate = new Date(lead.booked_at);
-
   if (isNaN(appointmentDate.getTime())) {
     throw new Error(`Could not parse appointment time: ${lead.booked_at}`);
   }
-
-  // Tint job = 2 hours
   const endDate = new Date(appointmentDate.getTime() + 2 * 60 * 60 * 1000);
-
   const event = await gcal.events.insert({
     calendarId: process.env.GOOGLE_CALENDAR_ID,
     requestBody: {
       summary:     `Tint Appointment — ${lead.lead_name}`,
       description: `Vehicle: ${lead.lead_vehicle}\nSpecial: ${lead.lead_special}\nPhone: ${lead.lead_phone}\nDeposit: PAID`,
-      start: {
-        dateTime: appointmentDate.toISOString(),
-        timeZone: "America/Chicago",
-      },
-      end: {
-        dateTime: endDate.toISOString(),
-        timeZone: "America/Chicago",
-      },
+      start: { dateTime: appointmentDate.toISOString(), timeZone: "America/Chicago" },
+      end:   { dateTime: endDate.toISOString(),         timeZone: "America/Chicago" },
     },
   });
-
   console.log(`[Calendar] Event created: ${event.data.htmlLink}`);
   return event.data;
 }
 
-
-// ─── UTILITY: TRIGGER RETELL AI CALL ─────────────────────────────────────────
 async function triggerRetellCall(lead, shop) {
   const response = await fetch("https://api.retellai.com/v2/create-phone-call", {
     method: "POST",
@@ -135,39 +116,33 @@ async function triggerRetellCall(lead, shop) {
         lead_vehicle: lead.leadVehicle,
         lead_special: lead.leadSpecial,
         shop_name:    shop.shopName,
+        lead_phone:   lead.leadPhone,
         current_date: new Date().toLocaleDateString("en-CA", {
-          timeZone: "America/Chicago"
-        }), // gives "2026-04-01"
+          timeZone: "America/Chicago",
+        }),
       },
     }),
   });
-
   if (!response.ok) {
     const err = await response.text();
     throw new Error(`Retell API error: ${err}`);
   }
-
   return response.json();
 }
 
-// ─── UTILITY: MAP GHL PAYLOAD → STANDARD LEAD ────────────────────────────────
 function mapLead(payload, fieldMapping) {
-  // Detect special from form name or payload
   let leadSpecial = "Ceramic Special";
-  
-  const formName = payload["name"] || 
-                   payload?.workflow?.lastAttributionSource?.formName || 
+  const formName = payload["name"] ||
+                   payload?.workflow?.lastAttributionSource?.formName ||
                    "";
-  
-  if (formName.toLowerCase().includes("199") || 
+  if (formName.toLowerCase().includes("199") ||
       formName.toLowerCase().includes("carbon")) {
     leadSpecial = "Carbon Special";
-  } else if (formName.toLowerCase().includes("299") || 
+  } else if (formName.toLowerCase().includes("299") ||
              formName.toLowerCase().includes("295") ||
              formName.toLowerCase().includes("ceramic")) {
     leadSpecial = "Ceramic Special";
   }
-
   return {
     leadName:    payload[fieldMapping.leadName]    || "there",
     leadPhone:   payload[fieldMapping.leadPhone]   || null,
@@ -183,18 +158,12 @@ app.use(express.json());
 app.get("/health", (_, res) => res.json({ status: "ok" }));
 
 // ─── ROUTE: DEBUG CALENDAR ────────────────────────────────────────────────────
-// Hit this anytime to see what Google Calendar returns
-// GET /debug/calendar
 app.get("/debug/calendar", async (req, res) => {
   try {
-    const now       = new Date();
-    const tomorrow  = new Date(now.getTime() + 86400000);
-    const dateStr   = getCentralDateString(now);
-    const tDateStr  = getCentralDateString(tomorrow);
-
-    const dayStart  = new Date(`${dateStr}T00:00:00-05:00`);
-    const dayEnd    = new Date(`${tDateStr}T23:59:59-05:00`);
-
+    const now      = new Date();
+    const tomorrow = new Date(now.getTime() + 86400000);
+    const dayStart = new Date(`${getCentralDateString(now)}T00:00:00-05:00`);
+    const dayEnd   = new Date(`${getCentralDateString(tomorrow)}T23:59:59-05:00`);
     const response = await gcal.events.list({
       calendarId:   process.env.GOOGLE_CALENDAR_ID,
       timeMin:      dayStart.toISOString(),
@@ -202,9 +171,7 @@ app.get("/debug/calendar", async (req, res) => {
       singleEvents: true,
       orderBy:      "startTime",
     });
-
     const events = response.data.items || [];
-
     res.json({
       total_events_found: events.length,
       calendar_id_used:   process.env.GOOGLE_CALENDAR_ID,
@@ -266,58 +233,38 @@ app.post("/webhook/ghl/:shopId", async (req, res) => {
   }
 });
 
-// ─── ROUTE: META FACEBOOK LEAD ADS WEBHOOK ───────────────────────────────────
-
-// GET — Meta verification handshake (required to activate webhook)
+// ─── ROUTE: META WEBHOOK VERIFICATION ────────────────────────────────────────
 app.get("/webhook/meta", (req, res) => {
   const VERIFY_TOKEN = process.env.META_VERIFY_TOKEN;
-
-  const mode      = req.query["hub.mode"];
-  const token     = req.query["hub.verify_token"];
-  const challenge = req.query["hub.challenge"];
-
+  const mode         = req.query["hub.mode"];
+  const token        = req.query["hub.verify_token"];
+  const challenge    = req.query["hub.challenge"];
   console.log("[Meta] Verification request received");
-
   if (mode === "subscribe" && token === VERIFY_TOKEN) {
     console.log("[Meta] Webhook verified successfully");
     return res.status(200).send(challenge);
   }
-
   console.error("[Meta] Verification failed — token mismatch");
   res.sendStatus(403);
 });
 
-// POST — Meta sends lead data here
+// ─── ROUTE: META WEBHOOK ─────────────────────────────────────────────────────
 app.post("/webhook/meta", async (req, res) => {
   console.log("\n[Meta] Webhook received:", JSON.stringify(req.body, null, 2));
-
-  // Acknowledge Meta immediately — they expect a fast 200
   res.status(200).send("EVENT_RECEIVED");
-
   try {
     const entries = req.body.entry || [];
-
     for (const entry of entries) {
       const changes = entry.changes || [];
-
       for (const change of changes) {
         if (change.field !== "leadgen") continue;
-
         const leadgenId = change.value?.leadgen_id;
-        const pageId    = change.value?.page_id;
-        const formId    = change.value?.form_id;
-
         console.log(`[Meta] New lead — leadgen_id: ${leadgenId}`);
-
-        // Fetch full lead details from Meta Graph API
         const leadData = await fetchMetaLead(leadgenId);
-
         if (!leadData) {
           console.error("[Meta] Could not fetch lead data");
           continue;
         }
-
-        // Store the lead
         const result = db.prepare(`
           INSERT INTO leads (shop_id, lead_name, lead_phone, lead_vehicle, lead_special)
           VALUES (?, ?, ?, ?, ?)
@@ -328,11 +275,8 @@ app.post("/webhook/meta", async (req, res) => {
           leadData.vehicle || "your vehicle",
           leadData.special || "Ceramic Special"
         );
-
         const leadId = result.lastInsertRowid;
-        console.log(`[Meta] Lead stored — id: ${leadId}, name: ${leadData.name}, phone: ${leadData.phone}`);
-
-        // Trigger call if enabled
+        console.log(`[Meta] Lead stored — id: ${leadId}, name: ${leadData.name}`);
         if (process.env.CALLS_ENABLED === "true" && leadData.phone) {
           const shop = SHOP_CONFIGS["pure-vision-tints"];
           try {
@@ -342,10 +286,8 @@ app.post("/webhook/meta", async (req, res) => {
               leadVehicle: leadData.vehicle || "your vehicle",
               leadSpecial: leadData.special || "Ceramic Special",
             }, shop);
-
             db.prepare(`UPDATE leads SET call_id = ?, call_status = 'calling' WHERE id = ?`)
               .run(callResult.call_id, leadId);
-
             console.log(`[Meta] Call triggered for ${leadData.name}`);
           } catch (err) {
             console.error(`[Meta] Call failed:`, err.message);
@@ -358,63 +300,48 @@ app.post("/webhook/meta", async (req, res) => {
   }
 });
 
-// ─── UTILITY: FETCH LEAD DATA FROM META GRAPH API ────────────────────────────
+// ─── UTILITY: FETCH META LEAD ─────────────────────────────────────────────────
 async function fetchMetaLead(leadgenId) {
   try {
     const response = await fetch(
       `https://graph.facebook.com/v19.0/${leadgenId}?access_token=${process.env.META_PAGE_ACCESS_TOKEN}`
     );
-
     const data = await response.json();
     console.log("[Meta] Raw lead data:", JSON.stringify(data, null, 2));
-
     if (!data.field_data) return null;
-
-    // Map Meta field names to your standard fields
-    // Field names depend on what your roommate named them in the lead form
     const fields = {};
     data.field_data.forEach(field => {
       fields[field.name.toLowerCase()] = field.values?.[0];
     });
-
     console.log("[Meta] Parsed fields:", fields);
-
     return {
       name:    fields["full_name"]    || fields["name"]    || null,
       phone:   fields["phone_number"] || fields["phone"]   || null,
       vehicle: fields["vehicle"]      || fields["car"]     || null,
       special: fields["special"]      || fields["service"] || "Ceramic Special",
     };
-
   } catch (err) {
     console.error("[Meta] Error fetching lead:", err.message);
     return null;
   }
 }
 
-// ─── ROUTE: RETELL CALL OUTCOME WEBHOOK ──────────────────────────────────────
+// ─── ROUTE: RETELL CALL OUTCOME ───────────────────────────────────────────────
 app.post("/webhook/retell/call-ended", async (req, res) => {
   console.log("\n[Retell] Raw payload:", JSON.stringify(req.body, null, 2));
-
-  const isV2 = req.body.event !== undefined;
-
+  const isV2        = req.body.event !== undefined;
   const call_id     = isV2 ? req.body.call?.call_id     : req.body.call_id;
   const call_status = isV2 ? req.body.call?.call_status : req.body.call_status;
-
   console.log(`[Retell] Parsed — id: ${call_id}, status: ${call_status}`);
-
   if (!call_id) {
     console.warn("[Retell] No call_id found in payload");
     return res.status(200).json({ ok: true });
   }
-
   const lead = db.prepare(`SELECT * FROM leads WHERE call_id = ?`).get(call_id);
-
   if (!lead) {
     console.warn(`[Retell] No lead found for call_id: ${call_id}`);
     return res.status(200).json({ ok: true });
   }
-
   const statusMap = {
     ended:      "completed",
     error:      "call_failed",
@@ -422,53 +349,31 @@ app.post("/webhook/retell/call-ended", async (req, res) => {
     no_answer:  "no_answer",
     registered: "completed",
   };
-
   const newStatus = statusMap[call_status] || "completed";
-
-  db.prepare(`UPDATE leads SET call_status = ? WHERE id = ?`)
-    .run(newStatus, lead.id);
-
+  db.prepare(`UPDATE leads SET call_status = ? WHERE id = ?`).run(newStatus, lead.id);
   console.log(`[Retell] Lead ${lead.id} updated → status: ${newStatus}`);
-
   res.status(200).json({ ok: true });
 });
 
-// ─── ROUTE: GET AVAILABLE SLOTS ───────────────────────────────────────────────
-// Called by Retell mid-conversation before offering times.
-// Retell passes the date the customer mentions.
-// Works for today, tomorrow, or any future date weeks ahead.
-//
-// Example Retell tool call:
-//   { "date": "tomorrow" }
-//   { "date": "2026-04-15" }
-//   { "date": "next Friday" } ← AI should normalize to YYYY-MM-DD before calling
+// ─── ROUTE: GET AVAILABILITY ──────────────────────────────────────────────────
 app.post("/tools/get-availability", async (req, res) => {
-
-    const raw  = req.body;
-    const args = raw.args || raw;
-    const date = args.date;
-
-    console.log("\n[Availability Tool] Raw body:", JSON.stringify(raw, null, 2));
-    console.log("[Availability Tool] Resolved date:", date);
-
-  
-    if (!date) {
-      return res.json({
-        response: "We have 9AM, 12PM, and 3PM available tomorrow. Which works best for you?",
-        available_slots: ["9AM", "12PM", "3PM"],
-      });
-    }
-
+  const raw  = req.body;
+  const args = raw.args || raw;
+  const date = args.date;
+  console.log("\n[Availability Tool] Raw body:", JSON.stringify(raw, null, 2));
+  console.log("[Availability Tool] Resolved date:", date);
+  if (!date) {
+    return res.json({
+      response:        "We have 9AM, 12PM, and 3PM available tomorrow. Which works best for you?",
+      available_slots: ["9AM", "12PM", "3PM"],
+    });
+  }
   try {
-    // Build day boundaries in Central time
     const checkDate = new Date(date + "T12:00:00-05:00");
-    const dateStr  = getCentralDateString(checkDate);
-    const dayStart = new Date(`${dateStr}T00:00:00-05:00`);
-    const dayEnd   = new Date(`${dateStr}T23:59:59-05:00`);
-
-    console.log(`[Availability Tool] Checking: ${dateStr} (${dayStart.toISOString()} → ${dayEnd.toISOString()})`);
-
-    // Fetch events from Google Calendar for that day
+    const dateStr   = getCentralDateString(checkDate);
+    const dayStart  = new Date(`${dateStr}T00:00:00-05:00`);
+    const dayEnd    = new Date(`${dateStr}T23:59:59-05:00`);
+    console.log(`[Availability Tool] Checking: ${dateStr}`);
     const response = await gcal.events.list({
       calendarId:   process.env.GOOGLE_CALENDAR_ID,
       timeMin:      dayStart.toISOString(),
@@ -476,34 +381,21 @@ app.post("/tools/get-availability", async (req, res) => {
       singleEvents: true,
       orderBy:      "startTime",
     });
-
     const existingEvents = response.data.items || [];
-
-    // Extract booked hours in Central time
     const bookedHours = existingEvents.map(event => {
       const start       = new Date(event.start.dateTime || event.start.date);
       const centralHour = getCentralHour(start);
-      console.log(`[Availability Tool] Booked: "${event.summary}" at central hour ${centralHour}`);
+      console.log(`[Availability Tool] Booked: "${event.summary}" at hour ${centralHour}`);
       return centralHour;
     });
-
     console.log(`[Availability Tool] All booked hours: ${bookedHours}`);
-
-    // Filter to only open slots
     const availableSlots = APPOINTMENT_SLOTS.filter(
       slot => !bookedHours.includes(slot.hour)
     );
-
     console.log(`[Availability Tool] Available: ${availableSlots.map(s => s.label)}`);
-
-    // Format the date nicely for the AI to speak
     const friendlyDate = checkDate.toLocaleDateString("en-US", {
-      weekday:  "long",
-      month:    "long",
-      day:      "numeric",
-      timeZone: "America/Chicago",
+      weekday: "long", month: "long", day: "numeric", timeZone: "America/Chicago",
     });
-
     if (availableSlots.length === 0) {
       return res.json({
         response:        `Unfortunately we're fully booked on ${friendlyDate}. Would you like me to check another day?`,
@@ -512,19 +404,15 @@ app.post("/tools/get-availability", async (req, res) => {
         friendly_date:   friendlyDate,
       });
     }
-
     const slotList = availableSlots.map(s => s.label).join(", ");
-
     return res.json({
       response:        `We have ${slotList} available on ${friendlyDate}. Which works best for you?`,
       available_slots: availableSlots.map(s => s.label),
       date:            dateStr,
       friendly_date:   friendlyDate,
     });
-
   } catch (err) {
     console.error("[Availability Tool] Error:", err.message);
-    // Safe fallback — never leave AI hanging
     return res.json({
       response:        "We have 9AM, 12PM, and 3PM available. Which works best for you?",
       available_slots: ["9AM", "12PM", "3PM"],
@@ -532,234 +420,87 @@ app.post("/tools/get-availability", async (req, res) => {
   }
 });
 
-// ─── ROUTE: SEND DEPOSIT LINK ─────────────────────────────────────────────────
-// Called by Retell when customer agrees to pay deposit.
-// Generates Square payment link, sends SMS, stores order ID.
+// ─── ROUTE: SEND DEPOSIT LINK — DISABLED UNTIL TWILIO A2P APPROVED ───────────
+// Uncomment this entire block when Twilio SMS is approved
+// app.post("/tools/send-deposit", async (req, res) => { ... });
 
-app.post("/tools/send-deposit", async (req, res) => {
-    console.log("\n[Deposit Tool] RAW BODY:", JSON.stringify(req.body, null, 2));
-    const raw            = req.body;
-    const args           = raw.args || raw;
-    const lead_name      = args.lead_name;
-    const lead_phone     = args.lead_phone;
-    const appointment_time = args.appointment_time;
+// ─── ROUTE: SQUARE PAYMENT WEBHOOK — DISABLED UNTIL DEPOSIT LINK RE-ENABLED ──
+// Uncomment this entire block when deposit flow is re-enabled
+// app.post("/webhooks/square", async (req, res) => { ... });
 
-    console.log("[Deposit Tool] Resolved args:", { lead_name, lead_phone, appointment_time });
+// ─── ROUTE: CHECK DEPOSIT STATUS — DISABLED UNTIL DEPOSIT LINK RE-ENABLED ────
+// app.post("/tools/check-deposit-status", async (req, res) => { ... });
 
-    // After resolving args, find or create the lead
-    let lead = db.prepare(`
-      SELECT * FROM leads WHERE lead_phone = ? AND deposit_sent = 0
-      ORDER BY created_at DESC LIMIT 1
-    `).get(lead_phone);
-
-    // Safety net — create lead if it doesn't exist (handles Retell test calls)
-    if (!lead) {
-      console.warn("[Deposit Tool] No existing lead found — creating on the fly");
-      const result = db.prepare(`
-        INSERT INTO leads (shop_id, lead_name, lead_phone, lead_vehicle, lead_special)
-        VALUES (?, ?, ?, ?, ?)
-      `).run("pure-vision-tints", lead_name, lead_phone, "Unknown vehicle", "Unknown special");
-      
-      lead = db.prepare(`SELECT * FROM leads WHERE id = ?`).get(result.lastInsertRowid);
-    }
-
-  if (!lead_phone) {
-    return res.status(400).json({
-      response: "I'm sorry, I wasn't able to send the deposit link. Please call us back."
-    });
+// ─── ROUTE: TRIGGER ALL PENDING LEADS ────────────────────────────────────────
+app.post("/admin/trigger-pending", async (req, res) => {
+  const { secret } = req.body;
+  if (secret !== process.env.MANUAL_ENTRY_SECRET) {
+    return res.status(403).json({ error: "Unauthorized" });
   }
-
-  try {
-    const squareRes = await fetch(
-      "https://connect.squareupsandbox.com/v2/online-checkout/payment-links",
-      // Switch to https://connect.squareup.com for production
-      {
-        method: "POST",
-        headers: {
-          "Content-Type":   "application/json",
-          "Authorization":  `Bearer ${process.env.SQUARE_ACCESS_TOKEN}`,
-          "Square-Version": "2024-01-18",
-        },
-        body: JSON.stringify({
-          idempotency_key: `deposit-${lead_phone}-${Date.now()}`,
-          order: {
-            location_id: process.env.SQUARE_LOCATION_ID,
-            line_items: [
-              {
-                name:     "Appointment Deposit — Pure Vision Tints",
-                quantity: "1",
-                base_price_money: {
-                  amount:   2000,
-                  currency: "USD",
-                },
-              },
-            ],
-          },
-          checkout_options: {
-            allow_tipping:          false,
-            redirect_url:           "https://purevisiontints.com/thank-you",
-            merchant_support_email: "hello@purevisiontints.com",
-          },
-        }),
-      }
-    );
-
-    const squareData = await squareRes.json();
-
-    if (!squareRes.ok) {
-      throw new Error(squareData.errors?.[0]?.detail || "Square API error");
-    }
-
-    const depositUrl    = squareData.payment_link.url;
-    const squareOrderId = squareData.payment_link.order_id;
-    const shortPhone    = lead_phone.slice(-4);
-
-    console.log(`[Deposit Tool] Square link created: ${depositUrl}`);
-    console.log(`[Deposit Tool] Square order ID: ${squareOrderId}`);
-
-    // Send SMS
-    await twilioClient.messages.create({
-      body: `Hi ${lead_name}! Here's your $20 deposit link to confirm your tint appointment at Pure Vision Tints: ${depositUrl} — Valid for 24 hours.`,
-      from: process.env.TWILIO_SMS_FROM,
-      to:   lead_phone,
-    });
-
-    console.log(`[Deposit Tool] SMS sent to ${lead_phone}`);
-
-    // Store order ID and appointment time — used for exact matching + calendar booking
-    db.prepare(`
-      UPDATE leads
-      SET deposit_sent = 1, square_order_id = ?, booked_at = ?
-      WHERE lead_phone = ? AND deposit_sent = 0
-    `).run(squareOrderId, appointment_time || null, lead_phone);
-
-    return res.json({
-      response: `I just sent the deposit link to the number ending in ${shortPhone}. Are you able to take care of that while we're on the phone so I can confirm you're locked in?`,
-      deposit_url: depositUrl,
-      success: true,
-    });
-
-  } catch (err) {
-    console.error("[Deposit Tool] Error:", err.message);
-    return res.json({
-      response: "I just sent the deposit link to your phone. Please complete it within 24 hours to hold your spot.",
-      success: false,
-    });
-  }
-});
-
-// ─── ROUTE: SQUARE PAYMENT WEBHOOK ───────────────────────────────────────────
-app.post("/webhooks/square", async (req, res) => {
-  const eventType = req.body.type;
-  console.log(`\n[Square Webhook] Received type: ${eventType}`);
-
-  if (eventType === "payment.updated") {
-    const payment = req.body.data?.object?.payment;
-    const status  = payment?.status;
-    const orderId = payment?.order_id;
-
-    console.log(`[Square Webhook] Payment status: ${status}, order: ${orderId}`);
-
-    if (status !== "COMPLETED") {
-      console.log("[Square Webhook] Not completed yet — ignoring");
-      return res.status(200).json({ ok: true });
-    }
-
-    // Match exactly by Square order ID — no ambiguity ever
-    const lead = db.prepare(`
-      SELECT * FROM leads
-      WHERE square_order_id = ? AND deposit_paid = 0
-    `).get(orderId);
-
-    if (!lead) {
-      console.warn(`[Square Webhook] No lead found for order: ${orderId}`);
-      return res.status(200).json({ ok: true });
-    }
-
-    // Mark deposit paid
-    db.prepare(`
-      UPDATE leads
-      SET deposit_paid = 1, call_status = 'confirmed'
-      WHERE id = ?
-    `).run(lead.id);
-
-    console.log(`[Square Webhook] Lead ${lead.id} — ${lead.lead_name} CONFIRMED! Deposit paid.`);
-
-    // Book calendar if we have an appointment time
-    if (lead.booked_at) {
-      try {
-        await bookGoogleCalendarEvent(lead);
-
-        db.prepare(`UPDATE leads SET call_status = 'booked' WHERE id = ?`)
-          .run(lead.id);
-
-        console.log(`[Calendar] Booked — ${lead.lead_name} at ${lead.booked_at}`);
-
-        // Send confirmation SMS
-        await twilioClient.messages.create({
-          body: `Hi ${lead.lead_name}! Your tint appointment at Pure Vision Tints is confirmed for ${lead.booked_at}. See you then!`,
-          from: process.env.TWILIO_SMS_FROM,
-          to:   lead.lead_phone,
-        });
-
-        console.log(`[Calendar] Confirmation SMS sent to ${lead.lead_phone}`);
-
-      } catch (err) {
-        console.error("[Calendar] Booking failed:", err.message);
-      }
-    } else {
-      console.warn(`[Calendar] No appointment time for lead ${lead.id} — manual booking needed`);
-    }
-  }
-
-  res.status(200).json({ ok: true });
-});
-
-app.post("/tools/check-deposit-status", async (req, res) => {
-  console.log("\n[Deposit Check] Called with:", JSON.stringify(req.body, null, 2));
-
-  const raw        = req.body;
-  const args       = raw.args || raw;
-  const lead_phone = args.lead_phone;
-
-  if (!lead_phone) {
-    return res.json({
-      status:   "unknown",
-      response: "I wasn't able to check your payment status. Please complete the deposit link within 24 hours.",
-    });
-  }
-
-  const lead = db.prepare(`
+  const pendingLeads = db.prepare(`
     SELECT * FROM leads
-    WHERE lead_phone = ? 
-    ORDER BY created_at DESC LIMIT 1
-  `).get(lead_phone);
-
-  if (!lead) {
-    return res.json({
-      status:   "unknown",
-      response: "Please complete the deposit link within 24 hours to secure your appointment.",
-    });
-  }
-
-  if (lead.deposit_paid === 1) {
-    return res.json({
-      status:   "paid",
-      response: `Your deposit is confirmed! You are officially locked into our schedule for ${lead.booked_at}. We look forward to taking care of your ${lead.lead_vehicle} — see you then!`,
-    });
-  }
-
-  if (lead.deposit_sent === 1) {
-    return res.json({
-      status:   "pending",
-      response: "I can see the link was sent but the deposit hasn't come through yet. No worries — you have 24 hours to complete it. Once paid you'll automatically receive a confirmation text locking you in.",
-    });
-  }
-
-  return res.json({
-    status:   "not_sent",
-    response: "Please complete the deposit link within 24 hours to secure your appointment.",
+    WHERE call_status = 'pending'
+    AND lead_phone NOT LIKE '%{%'
+    AND length(lead_phone) >= 12
+    ORDER BY created_at DESC
+  `).all();
+  console.log(`[Admin] Triggering ${pendingLeads.length} pending leads`);
+  res.status(200).json({
+    message: `Triggering ${pendingLeads.length} leads`,
+    leads: pendingLeads.map(l => ({ id: l.id, name: l.lead_name, phone: l.lead_phone })),
   });
+  const shop = SHOP_CONFIGS["pure-vision-tints"];
+  for (let i = 0; i < pendingLeads.length; i++) {
+    const lead = pendingLeads[i];
+    if (i > 0) await new Promise(resolve => setTimeout(resolve, 3 * 60 * 1000));
+    try {
+      const callResult = await triggerRetellCall({
+        leadName:    lead.lead_name,
+        leadPhone:   lead.lead_phone,
+        leadVehicle: lead.lead_vehicle,
+        leadSpecial: lead.lead_special,
+      }, shop);
+      db.prepare(`UPDATE leads SET call_id = ?, call_status = 'calling' WHERE id = ?`)
+        .run(callResult.call_id, lead.id);
+      console.log(`[Admin] Called ${lead.lead_name} (${lead.lead_phone}) — ${i + 1}/${pendingLeads.length}`);
+    } catch (err) {
+      console.error(`[Admin] Failed to call ${lead.lead_name}:`, err.message);
+    }
+  }
+});
+
+// ─── ROUTE: MANUAL LEAD ENTRY ─────────────────────────────────────────────────
+app.post("/leads/manual", async (req, res) => {
+  const { name, phone, vehicle, special, secret } = req.body;
+  if (secret !== process.env.MANUAL_ENTRY_SECRET) {
+    return res.status(403).json({ error: "Unauthorized" });
+  }
+  if (!phone) {
+    return res.status(400).json({ error: "Phone required" });
+  }
+  const result = db.prepare(`
+    INSERT INTO leads (shop_id, lead_name, lead_phone, lead_vehicle, lead_special)
+    VALUES (?, ?, ?, ?, ?)
+  `).run("pure-vision-tints", name || "there", phone, vehicle || "your vehicle", special || "Ceramic Special");
+  const leadId = result.lastInsertRowid;
+  console.log(`[Manual] Lead stored — id: ${leadId}, name: ${name}, phone: ${phone}`);
+  if (process.env.CALLS_ENABLED === "true") {
+    const shop = SHOP_CONFIGS["pure-vision-tints"];
+    try {
+      const callResult = await triggerRetellCall({
+        leadName:    name || "there",
+        leadPhone:   phone,
+        leadVehicle: vehicle || "your vehicle",
+        leadSpecial: special || "Ceramic Special",
+      }, shop);
+      db.prepare(`UPDATE leads SET call_id = ?, call_status = 'calling' WHERE id = ?`)
+        .run(callResult.call_id, leadId);
+      console.log(`[Manual] Call triggered for ${name}`);
+    } catch (err) {
+      console.error(`[Manual] Call failed:`, err.message);
+    }
+  }
+  res.status(200).json({ success: true, leadId });
 });
 
 // ─── ROUTE: DASHBOARD API ─────────────────────────────────────────────────────
