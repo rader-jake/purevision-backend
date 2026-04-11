@@ -199,10 +199,18 @@ app.post("/tools/book-appointment", async (req, res) => {
 
     console.log(`[Book Tool] Appointment booked — ${lead_name} at ${appointment_time}`);
 
-    return res.json({
-      response: `Perfect, you're all set! I've got you down for ${appointment_time}. We look forward to taking care of your ${lead_vehicle || "vehicle"} — see you then!`,
-      success: true,
-    });
+      const date = new Date(appointment_time.replace(" ", "T") + ":00-05:00");
+      const friendlyTime = date.toLocaleString("en-US", {
+        weekday: "long",
+        month:   "long", 
+        day:     "numeric",
+        hour:    "numeric",
+        minute:  "2-digit",
+        timeZone: "America/Chicago",
+      });
+      return res.json({
+        response: `You're officially locked in! We'll see you ${friendlyTime} for your ${lead_vehicle || "vehicle"}. Jordy will have everything ready for you — see you then!`,
+      });
 
   } catch (err) {
     console.error("[Book Tool] Error:", err.message);
