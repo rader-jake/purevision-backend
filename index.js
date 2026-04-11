@@ -121,7 +121,14 @@ app.get("/debug/calendar", async (req, res) => {
 });
 
 async function bookGoogleCalendarEvent(lead) {
-  const appointmentDate = new Date(lead.booked_at);
+  // Parse as Central time explicitly by appending the offset
+  // "2026-04-12 11:00" becomes "2026-04-12T11:00:00-05:00"
+  const dateTimeStr = lead.booked_at.includes("T") 
+    ? lead.booked_at 
+    : lead.booked_at.replace(" ", "T") + ":00-05:00";
+  
+  const appointmentDate = new Date(dateTimeStr);
+  
   if (isNaN(appointmentDate.getTime())) {
     throw new Error(`Could not parse appointment time: ${lead.booked_at}`);
   }
