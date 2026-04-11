@@ -83,6 +83,43 @@ function getCentralHour(date) {
   );
 }
 
+
+// ─── MIDDLEWARE ───────────────────────────────────────────────────────────────
+app.use(express.json());
+
+// ─── ROUTE: HEALTH CHECK ──────────────────────────────────────────────────────
+app.get("/health", (_, res) => res.json({ status: "ok" }));
+
+// ─── ROUTE: DEBUG CALENDAR ────────────────────────────────────────────────────
+app.get("/debug/calendar", async (req, res) => {
+  try {
+    const now      = new Date();
+    const tomorrow = new Date(now.getTime() + 86400000);
+    const dayStart = new Date(`${getCentralDateString(now)}T00:00:00-05:00`);
+    const dayEnd   = new Date(`${getCentralDateString(tomorrow)}T23:59:59-05:00`);
+    const response = await gcal.events.list({
+      calendarId:   process.env.GOOGLE_CALENDAR_ID,
+      timeMin:      dayStart.toISOString(),
+      timeMax:      dayEnd.toISOString(),
+      singleEvents: true,
+      orderBy:      "startTime",
+    });
+    const events = response.data.items || [];
+    res.json({
+      total_events_found: events.length,
+      calendar_id_used:   process.env.GOOGLE_CALENDAR_ID,
+      events: events.map(e => ({
+        summary:      e.summary,
+        start:        e.start,
+        central_hour: getCentralHour(new Date(e.start.dateTime || e.start.date)),
+      })),
+    });
+  } catch (err) {
+    console.error("[Debug] Calendar error:", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 async function bookGoogleCalendarEvent(lead) {
   const appointmentDate = new Date(lead.booked_at);
   if (isNaN(appointmentDate.getTime())) {
@@ -220,41 +257,6 @@ function mapLead(payload, fieldMapping) {
   };
 }
 
-// ─── MIDDLEWARE ───────────────────────────────────────────────────────────────
-app.use(express.json());
-
-// ─── ROUTE: HEALTH CHECK ──────────────────────────────────────────────────────
-app.get("/health", (_, res) => res.json({ status: "ok" }));
-
-// ─── ROUTE: DEBUG CALENDAR ────────────────────────────────────────────────────
-app.get("/debug/calendar", async (req, res) => {
-  try {
-    const now      = new Date();
-    const tomorrow = new Date(now.getTime() + 86400000);
-    const dayStart = new Date(`${getCentralDateString(now)}T00:00:00-05:00`);
-    const dayEnd   = new Date(`${getCentralDateString(tomorrow)}T23:59:59-05:00`);
-    const response = await gcal.events.list({
-      calendarId:   process.env.GOOGLE_CALENDAR_ID,
-      timeMin:      dayStart.toISOString(),
-      timeMax:      dayEnd.toISOString(),
-      singleEvents: true,
-      orderBy:      "startTime",
-    });
-    const events = response.data.items || [];
-    res.json({
-      total_events_found: events.length,
-      calendar_id_used:   process.env.GOOGLE_CALENDAR_ID,
-      events: events.map(e => ({
-        summary:      e.summary,
-        start:        e.start,
-        central_hour: getCentralHour(new Date(e.start.dateTime || e.start.date)),
-      })),
-    });
-  } catch (err) {
-    console.error("[Debug] Calendar error:", err.message);
-    res.status(500).json({ error: err.message });
-  }
-});
 
 // ─── ROUTE: GHL WEBHOOK ───────────────────────────────────────────────────────
 app.post("/webhook/ghl/:shopId", async (req, res) => {
