@@ -209,8 +209,7 @@ app.post("/tools/book-appointment", async (req, res) => {
         timeZone: "America/Chicago",
       });
       return res.json({
-        response: `You're officially locked in! We'll see you ${friendlyTime} for your ${lead_vehicle || "vehicle"}. Jordy will have everything ready for you — see you then!`,
-      });
+      response: `You're officially locked in for ${friendlyTime}! We look forward to taking care of your ${lead_vehicle || "vehicle"}.`,      });
 
   } catch (err) {
     console.error("[Book Tool] Error:", err.message);
