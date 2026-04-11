@@ -397,20 +397,31 @@ async function fetchMetaLead(leadgenId) {
 
 // ─── ROUTE: RETELL CALL OUTCOME ───────────────────────────────────────────────
 app.post("/webhook/retell/call-ended", async (req, res) => {
-  console.log("\n[Retell] Raw payload:", JSON.stringify(req.body, null, 2));
-  const isV2        = req.body.event !== undefined;
-  const call_id     = isV2 ? req.body.call?.call_id     : req.body.call_id;
-  const call_status = isV2 ? req.body.call?.call_status : req.body.call_status;
-  console.log(`[Retell] Parsed — id: ${call_id}, status: ${call_status}`);
-  if (!call_id) {
-    console.warn("[Retell] No call_id found in payload");
+
+  const event     = req.body.event;
+  const call      = req.body.call;
+  const call_id   = call?.call_id;
+  const status    = call?.call_status;
+
+  // Only process events we care about — ignore call_started and call_analyzed
+  if (event !== "call_ended" && status !== "ended" && status !== "error" &&
+      status !== "no_answer" && status !== "busy") {
     return res.status(200).json({ ok: true });
   }
+
+  console.log(`[Retell] Call ended — id: ${call_id}, status: ${status}`);
+
+  if (!call_id) {
+    return res.status(200).json({ ok: true });
+  }
+
   const lead = db.prepare(`SELECT * FROM leads WHERE call_id = ?`).get(call_id);
+
   if (!lead) {
     console.warn(`[Retell] No lead found for call_id: ${call_id}`);
     return res.status(200).json({ ok: true });
   }
+
   const statusMap = {
     ended:      "completed",
     error:      "call_failed",
@@ -418,9 +429,14 @@ app.post("/webhook/retell/call-ended", async (req, res) => {
     no_answer:  "no_answer",
     registered: "completed",
   };
-  const newStatus = statusMap[call_status] || "completed";
-  db.prepare(`UPDATE leads SET call_status = ? WHERE id = ?`).run(newStatus, lead.id);
-  console.log(`[Retell] Lead ${lead.id} updated → status: ${newStatus}`);
+
+  const newStatus = statusMap[status] || "completed";
+
+  db.prepare(`UPDATE leads SET call_status = ? WHERE id = ?`)
+    .run(newStatus, lead.id);
+
+  console.log(`[Retell] Lead ${lead.id} — ${lead.lead_name} → ${newStatus}`);
+
   res.status(200).json({ ok: true });
 });
 
