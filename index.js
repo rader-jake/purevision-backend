@@ -580,6 +580,7 @@ app.post("/admin/trigger-pending", async (req, res) => {
 // Powers the "Call me now" button on shopdesk.ai
 app.post("/demo/call", async (req, res) => {
   console.log("[ShopDesk Demo] Route hit — body:", JSON.stringify(req.body));
+  console.log("ShopDesk Demo")
   const { phone, name } = req.body;
 
   if (!phone) {
