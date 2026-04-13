@@ -641,6 +641,69 @@ app.post("/demo/call", async (req, res) => {
   }
 });
 
+app.get('/dashboard/data/:shopId', async (req, res) => {
+  const { password } = req.query;
+  if (password !== 'purevision2026') return res.status(401).json({ error: 'Unauthorized' });
+
+  try {
+    // Leads from SQLite
+    const leads = await new Promise((resolve, reject) => {
+      db.all('SELECT * FROM leads WHERE shop_id = ? ORDER BY created_at DESC', [req.params.shopId], (err, rows) => {
+        if (err) reject(err); else resolve(rows);
+      });
+    });
+
+    // Calls from Retell
+    let calls = [];
+    try {
+      const retellResp = await fetch('https://api.retellai.com/v2/list-calls', {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${process.env.RETELL_API_KEY}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ agent_id: process.env.RETELL_AGENT_ID, limit: 50 })
+      });
+      const retellData = await retellResp.json();
+      calls = retellData.calls || [];
+    } catch (e) {
+      console.error('Retell fetch failed:', e.message);
+    }
+
+    // Calendar events (next 14 days)
+    let events = [];
+    try {
+      const { google } = require('googleapis');
+      const auth = new google.auth.JWT(
+        process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL,
+        null,
+        process.env.GOOGLE_PRIVATE_KEY.replace(/\\n/g, '\n'),
+        ['https://www.googleapis.com/auth/calendar.readonly']
+      );
+      const calendar = google.calendar({ version: 'v3', auth });
+      const now = new Date();
+      const twoWeeks = new Date(now.getTime() + 14 * 24 * 60 * 60 * 1000);
+      const calResp = await calendar.events.list({
+        calendarId: process.env.GOOGLE_CALENDAR_ID,
+        timeMin: now.toISOString(),
+        timeMax: twoWeeks.toISOString(),
+        singleEvents: true,
+        orderBy: 'startTime',
+      });
+      events = (calResp.data.items || []).map(e => ({
+        summary: e.summary,
+        description: e.description,
+        start: e.start.dateTime || e.start.date,
+        end: e.end.dateTime || e.end.date,
+      }));
+    } catch (e) {
+      console.error('Calendar fetch failed:', e.message);
+    }
+
+    res.json({ leads, calls, events });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
 // ─── ROUTE: MANUAL LEAD ENTRY ─────────────────────────────────────────────────
 app.post("/leads/manual", async (req, res) => {
   const { name, phone, vehicle, special, secret } = req.body;
