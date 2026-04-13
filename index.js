@@ -647,11 +647,9 @@ app.get('/dashboard/data/:shopId', async (req, res) => {
 
   try {
     // Leads from SQLite
-    const leads = await new Promise((resolve, reject) => {
-      db.all('SELECT * FROM leads WHERE shop_id = ? ORDER BY created_at DESC', [req.params.shopId], (err, rows) => {
-        if (err) reject(err); else resolve(rows);
-      });
-    });
+    const leads = db.prepare(
+      'SELECT * FROM leads WHERE shop_id = ? ORDER BY created_at DESC'
+    ).all(req.params.shopId);
 
     // Calls from Retell
     let calls = [];
