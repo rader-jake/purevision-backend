@@ -570,28 +570,46 @@ app.post("/admin/trigger-pending", async (req, res) => {
   }
 });
 
-// ─── ROUTE: CHAT PROXY ────────────────────────────────────────────────────────
-app.post("/chat", async (req, res) => {
-  const { messages } = req.body;
+// ─── ROUTE: SHOPDESK DEMO CALL ────────────────────────────────────────────────
+// Powers the "Call me now" button on shopdesk.ai
+app.post("/demo/call", async (req, res) => {
+  const { phone, name } = req.body;
+
+  if (!phone) {
+    return res.status(400).json({ error: "Phone number required" });
+  }
+
+  console.log(`[ShopDesk Demo] Calling ${name || "visitor"} at ${phone}`);
+
   try {
-    const response = await fetch("https://api.anthropic.com/v1/messages", {
+    const response = await fetch("https://api.retellai.com/v2/create-phone-call", {
       method: "POST",
       headers: {
-        "Content-Type": "application/json",
-        "x-api-key": process.env.ANTHROPIC_API_KEY,
-        "anthropic-version": "2023-06-01",
+        "Content-Type":  "application/json",
+        "Authorization": `Bearer ${process.env.RETELL_API_KEY}`,
       },
       body: JSON.stringify({
-        model: "claude-sonnet-4-20250514",
-        max_tokens: 300,
-        system: `You are Marissa, an AI assistant for ShopDesk.ai — a company that provides AI receptionists for service businesses like tint shops, auto detailing, HVAC, and other service industries. ShopDesk builds custom AI receptionists that call leads within 60 seconds, handle inbound calls 24/7, book appointments into calendars, send SMS follow-ups, collect deposits, and integrate with GoHighLevel, Facebook Lead Ads, Google Calendar, Square, and more. Pricing: Starter $297/month, Growth $497/month, Multi-location $797/month. All plans include a personal AI technician, custom script, money-back guarantee, cancel anytime. Be warm, conversational, concise — 2-3 sentences max. If someone wants to sign up encourage them to click Call me now or share their info.`,
-        messages,
+        from_number: process.env.TWILIO_PHONE_NUMBER,
+        to_number:   phone,
+        agent_id:    process.env.SHOPDESK_DEMO_AGENT_ID,
+        retell_llm_dynamic_variables: {
+          visitor_name: name || "there",
+        },
       }),
     });
+
+    if (!response.ok) {
+      const err = await response.text();
+      throw new Error(`Retell error: ${err}`);
+    }
+
     const data = await response.json();
-    res.json({ reply: data.content?.[0]?.text || "I'd love to help — what questions do you have about ShopDesk?" });
+    console.log(`[ShopDesk Demo] Call triggered: ${data.call_id}`);
+    res.json({ success: true, call_id: data.call_id });
+
   } catch (err) {
-    res.status(500).json({ reply: "Having a quick hiccup — try the Call me now button above!" });
+    console.error(`[ShopDesk Demo] Error: ${err.message}`);
+    res.status(500).json({ error: err.message });
   }
 });
 
