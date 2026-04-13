@@ -570,6 +570,31 @@ app.post("/admin/trigger-pending", async (req, res) => {
   }
 });
 
+// ─── ROUTE: CHAT PROXY ────────────────────────────────────────────────────────
+app.post("/chat", async (req, res) => {
+  const { messages } = req.body;
+  try {
+    const response = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": process.env.ANTHROPIC_API_KEY,
+        "anthropic-version": "2023-06-01",
+      },
+      body: JSON.stringify({
+        model: "claude-sonnet-4-20250514",
+        max_tokens: 300,
+        system: `You are Marissa, an AI assistant for ShopDesk.ai — a company that provides AI receptionists for service businesses like tint shops, auto detailing, HVAC, and other service industries. ShopDesk builds custom AI receptionists that call leads within 60 seconds, handle inbound calls 24/7, book appointments into calendars, send SMS follow-ups, collect deposits, and integrate with GoHighLevel, Facebook Lead Ads, Google Calendar, Square, and more. Pricing: Starter $297/month, Growth $497/month, Multi-location $797/month. All plans include a personal AI technician, custom script, money-back guarantee, cancel anytime. Be warm, conversational, concise — 2-3 sentences max. If someone wants to sign up encourage them to click Call me now or share their info.`,
+        messages,
+      }),
+    });
+    const data = await response.json();
+    res.json({ reply: data.content?.[0]?.text || "I'd love to help — what questions do you have about ShopDesk?" });
+  } catch (err) {
+    res.status(500).json({ reply: "Having a quick hiccup — try the Call me now button above!" });
+  }
+});
+
 // ─── ROUTE: MANUAL LEAD ENTRY ─────────────────────────────────────────────────
 app.post("/leads/manual", async (req, res) => {
   const { name, phone, vehicle, special, secret } = req.body;
