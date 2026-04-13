@@ -3,6 +3,7 @@ import dotenv from "dotenv";
 import Database from "better-sqlite3";
 import twilio from "twilio";
 import { google } from "googleapis";
+import cors from "cors";
 
 dotenv.config();
 
@@ -89,6 +90,11 @@ app.use(express.json());
 
 // ─── ROUTE: HEALTH CHECK ──────────────────────────────────────────────────────
 app.get("/health", (_, res) => res.json({ status: "ok" }));
+
+app.use(cors({
+  origin: ["https://shopdesk.ai", "https://www.shopdesk.ai", "http://localhost:3000"],
+  methods: ["GET", "POST"],
+}));
 
 // ─── ROUTE: DEBUG CALENDAR ────────────────────────────────────────────────────
 app.get("/debug/calendar", async (req, res) => {
@@ -573,6 +579,7 @@ app.post("/admin/trigger-pending", async (req, res) => {
 // ─── ROUTE: SHOPDESK DEMO CALL ────────────────────────────────────────────────
 // Powers the "Call me now" button on shopdesk.ai
 app.post("/demo/call", async (req, res) => {
+  console.log("[ShopDesk Demo] Route hit — body:", JSON.stringify(req.body));
   const { phone, name } = req.body;
 
   if (!phone) {
