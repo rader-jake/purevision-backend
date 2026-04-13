@@ -576,6 +576,26 @@ app.post("/admin/trigger-pending", async (req, res) => {
   }
 });
 
+// Proxy Retell call list
+app.get('/dashboard/calls', async (req, res) => {
+  const { agentId } = req.query;
+  const resp = await fetch(`https://api.retellai.com/v2/list-calls`, {
+    method: 'POST',
+    headers: { 'Authorization': `Bearer ${process.env.RETELL_API_KEY}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ agent_id: agentId, limit: 50 })
+  });
+  const data = await resp.json();
+  res.json({ calls: data.calls || [] });
+});
+
+// Proxy single call detail
+app.get('/dashboard/call/:callId', async (req, res) => {
+  const resp = await fetch(`https://api.retellai.com/v2/get-call/${req.params.callId}`, {
+    headers: { 'Authorization': `Bearer ${process.env.RETELL_API_KEY}` }
+  });
+  res.json(await resp.json());
+});
+
 // ─── ROUTE: SHOPDESK DEMO CALL ────────────────────────────────────────────────
 // Powers the "Call me now" button on shopdesk.ai
 app.post("/demo/call", async (req, res) => {
