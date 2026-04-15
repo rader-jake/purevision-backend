@@ -646,6 +646,10 @@ app.get('/dashboard/data/:shopId', async (req, res) => {
   if (password !== 'purevision2026') return res.status(401).json({ error: 'Unauthorized' });
 
   try {
+    const rawKey = process.env.GOOGLE_PRIVATE_KEY;
+    console.log('[Calendar] Key starts with:', rawKey?.slice(0,30));
+    console.log('[Calendar] Key length:', rawKey?.length);
+    console.log('[Calendar] Service account:', process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL);
     // Leads from SQLite
     const leads = db.prepare(
       'SELECT * FROM leads WHERE shop_id = ? ORDER BY created_at DESC'
