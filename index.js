@@ -651,18 +651,29 @@ app.get('/dashboard/data/:shopId', async (req, res) => {
       'SELECT * FROM leads WHERE shop_id = ? ORDER BY created_at DESC'
     ).all(req.params.shopId);
 
-    // Calls from Retell
-    let calls = [];
-    try {
-      const retellResp = await fetch('https://api.retellai.com/v2/list-calls', {
-        method: 'POST',
-        headers: { 'Authorization': `Bearer ${process.env.RETELL_API_KEY}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ agent_id: process.env.RETELL_AGENT_ID, limit: 50 })
-      });
-      const retellData = await retellResp.json();
-      calls = retellData.calls || [];
-    } catch (e) {
-      console.error('Retell fetch failed:', e.message);
+    // Fetch full call details from Retell using call_id on each lead
+    const calls = [];
+    const leadsWithCalls = leads.filter(l => l.call_id);
+    for (const lead of leadsWithCalls) {
+      try {
+        const r = await fetch(`https://api.retellai.com/v2/get-call/${lead.call_id}`, {
+          headers: { 'Authorization': `Bearer ${process.env.RETELL_API_KEY}` }
+        });
+        if (r.ok) {
+          const callData = await r.json();
+          // Merge lead info into the call object so dashboard has name/vehicle
+          calls.push({
+            ...callData,
+            lead_name: lead.lead_name,
+            lead_phone: lead.lead_phone,
+            lead_vehicle: lead.lead_vehicle,
+            lead_special: lead.lead_special,
+            booked_at: lead.booked_at,
+          });
+        }
+      } catch (e) {
+        console.error(`Retell fetch failed for ${lead.call_id}:`, e.message);
+      }
     }
 
     // Calendar events (next 14 days)
