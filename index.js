@@ -683,12 +683,14 @@ app.get('/dashboard/data/:shopId', async (req, res) => {
     // Calendar events (next 14 days)
     let events = [];
     try {
-      const auth = new google.auth.JWT(
-        process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL,
-        null,
-        process.env.GOOGLE_PRIVATE_KEY.replace(/\\n/g,'\n').replace(/^"|"$/g,''),
-        ['https://www.googleapis.com/auth/calendar.readonly']
-      );
+      const auth = new google.auth.JWT({
+      email: process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL,
+      key: process.env.GOOGLE_PRIVATE_KEY.replace(/\\n/g, "\n"),
+      scopes: ["https://www.googleapis.com/auth/calendar.readonly"],
+    });
+
+    await auth.authorize();
+
       const calendar = google.calendar({ version: 'v3', auth });
       const now = new Date();
       const twoWeeks = new Date(now.getTime() + 14 * 24 * 60 * 60 * 1000);
