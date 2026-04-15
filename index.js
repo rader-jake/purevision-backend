@@ -679,7 +679,6 @@ app.get('/dashboard/data/:shopId', async (req, res) => {
     // Calendar events (next 14 days)
     let events = [];
     try {
-      const { google } = require('googleapis');
       const auth = new google.auth.JWT(
         process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL,
         null,
