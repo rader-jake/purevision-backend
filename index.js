@@ -682,7 +682,7 @@ app.get('/dashboard/data/:shopId', async (req, res) => {
       const auth = new google.auth.JWT(
         process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL,
         null,
-        process.env.GOOGLE_PRIVATE_KEY.replace(/\\n/g, '\n'),
+        process.env.GOOGLE_PRIVATE_KEY.replace(/\\n/g,'\n').replace(/^"|"$/g,''),
         ['https://www.googleapis.com/auth/calendar.readonly']
       );
       const calendar = google.calendar({ version: 'v3', auth });
