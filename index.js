@@ -21,6 +21,7 @@ db.exec(`
     lead_special    TEXT,
     call_status     TEXT DEFAULT 'pending',
     call_id         TEXT,
+    call_attempts   INTEGER DEFAULT 0,
     booked_at       TEXT,
     square_order_id TEXT,
     deposit_sent    INTEGER DEFAULT 0,
@@ -28,6 +29,21 @@ db.exec(`
     created_at      TEXT DEFAULT (datetime('now'))
   )
 `);
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS sms_messages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    lead_id INTEGER,
+    direction TEXT,
+    body TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )
+`);
+
+
+try {
+  db.exec(`ALTER TABLE leads ADD COLUMN call_attempts INTEGER DEFAULT 0`);
+} catch(e) { /* already exists */ }
 
 // ─── SHOP CONFIG ──────────────────────────────────────────────────────────────
 const SHOP_CONFIGS = {
@@ -88,13 +104,14 @@ function getCentralHour(date) {
 // ─── MIDDLEWARE ───────────────────────────────────────────────────────────────
 app.use(express.json());
 
-// ─── ROUTE: HEALTH CHECK ──────────────────────────────────────────────────────
-app.get("/health", (_, res) => res.json({ status: "ok" }));
-
 app.use(cors({
   origin: ["https://shopdesk.ai", "https://www.shopdesk.ai", "http://localhost:3000"],
   methods: ["GET", "POST"],
 }));
+
+// ─── ROUTE: HEALTH CHECK ──────────────────────────────────────────────────────
+app.get("/health", (_, res) => res.json({ status: "ok" }));
+
 
 // ─── ROUTE: DEBUG CALENDAR ────────────────────────────────────────────────────
 app.get("/debug/calendar", async (req, res) => {
@@ -417,15 +434,249 @@ async function fetchMetaLead(leadgenId) {
   }
 }
 
+// ─── SMS TOOLS ────────────────────────────────────────────────────────────────
+const smsTools = [
+  {
+    name: "get_availability",
+    description: "Check available appointment slots for a given date",
+    input_schema: {
+      type: "object",
+      properties: {
+        date: { type: "string", description: "Date in YYYY-MM-DD format" }
+      },
+      required: ["date"]
+    }
+  },
+  {
+    name: "book_appointment",
+    description: "Book an appointment for the lead",
+    input_schema: {
+      type: "object",
+      properties: {
+        lead_name: { type: "string" },
+        lead_phone: { type: "string" },
+        lead_vehicle: { type: "string" },
+        lead_special: { type: "string" },
+        appointment_time: { type: "string", description: "Format: YYYY-MM-DD HH:mm" }
+      },
+      required: ["lead_name", "lead_phone", "lead_vehicle", "lead_special", "appointment_time"]
+    }
+  }
+];
+
+// ─── SMS SYSTEM PROMPT ────────────────────────────────────────────────────────
+function buildSMSSystemPrompt(lead) {
+  return `You are Marissa, Pure Vision Tints' AI receptionist texting with a lead.
+
+IDENTITY
+You are an AI texting on behalf of Pure Vision Tints. Your name is Marissa.
+You are warm, efficient, and focused on getting the customer booked.
+This is SMS — keep every message SHORT (1-3 sentences max).
+
+LEAD INFO
+- Name: ${lead.lead_name}
+- Vehicle: ${lead.lead_vehicle}
+- Special: ${lead.lead_special || 'Ceramic Special'}
+- Phone: ${lead.lead_phone}
+
+PRICING & SERVICES
+Carbon Special — $199: all side windows + rear windshield, GeoShield carbon film
+Ceramic Special — $395: all side windows + rear windshield, Xpel XR Black ceramic, blocks 85% IR heat and 99% UV
+Tint Removal — $50 extra if they have existing tint
+Visor: $40 | 2 Carbon doors: $40 | 2 Ceramic doors: $80
+Carbon windshield: $125 | Ceramic windshield: $150
+Shades: 5%, 15%, 20%, 30%, 50%, 70% — shade does NOT affect price
+Lifetime warranty on all work
+
+SHOP DETAILS
+Location: Hockley TX, off I two ninety where it meets Highway 99, about 10 min from Cypress
+Address: 33619 Falcon Spring Street, Hockley TX 77447
+Owner: Jordy Chen, 5+ years experience, does all work himself
+Waiting room with WiFi, drop-off available same day or next day
+
+CONVERSATION FLOW
+1. Confirm they are still interested in tinting their ${lead.lead_vehicle}
+2. Ask if there is existing tint — adds $50 removal fee if yes
+3. Confirm their special and give total price
+4. Mention location — "We're in Hockley off I two ninety, about 10 min from Cypress"
+5. Ask what day works
+6. Call get_availability with that date in YYYY-MM-DD format
+7. Offer only slots the tool returns — never invent availability
+8. When they pick a time confirm: "Perfect — I have you down for [TIME] on [DAY] for your ${lead.lead_vehicle}, that's the [SPECIAL] at [PRICE]. Any questions before I lock you in?"
+9. Only after they confirm no more questions call book_appointment
+10. Confirm booking and close warmly
+
+OBJECTION HANDLING
+"Too far" → "Totally understand! If you're ever in the area we'd love to take care of you 🙏"
+"Need to think" → "Of course! Just so you know spots fill up fast — want me to pencil something in and we can always adjust?"
+"How long?" → "About 1-2 hours. Drop off or hang out in our waiting room with WiFi!"
+"Carbon vs ceramic?" → "Ceramic is premium — Xpel XR Black blocks 85% of heat. In Texas heat most people go ceramic!"
+"Is this a real person?" → "I'm Marissa, Pure Vision's AI receptionist! I handle scheduling so Jordy can focus on the work. How can I help?"
+"Already tinted" → "No worries! If you ever need a re-tint or know someone who does, keep us in mind 🙏"
+"Legal shades?" → "Texas allows 25% on front windows, any darkness on rear. We have all options!"
+
+RULES
+- Always use the customer's first name
+- Never make up availability — always call get_availability first
+- Never confirm a booking without calling book_appointment
+- Never mention Claude, Anthropic, or any AI platform
+- If they say STOP or not interested → "No problem! Feel free to reach out anytime 🙏" then stop
+- Keep every reply to 1-3 sentences — this is SMS not email
+- Today's date is ${new Date().toLocaleDateString('en-US', { timeZone: 'America/Chicago' })}`;
+}
+
+// ─── SMS AGENT LOOP ───────────────────────────────────────────────────────────
+async function runSMSAgent(messages, lead) {
+  let currentMessages = [...messages];
+
+  while (true) {
+    const aiResp = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': process.env.ANTHROPIC_API_KEY,
+        'anthropic-version': '2023-06-01'
+      },
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-20250514',
+        max_tokens: 500,
+        system: buildSMSSystemPrompt(lead),
+        tools: smsTools,
+        messages: currentMessages
+      })
+    });
+
+    const aiData = await aiResp.json();
+    const { content, stop_reason } = aiData;
+
+    if (stop_reason === 'tool_use') {
+      const toolUse = content.find(b => b.type === 'tool_use');
+      const toolName = toolUse.name;
+      const toolInput = toolUse.input;
+
+      console.log(`[SMS Agent] Tool call: ${toolName}`, toolInput);
+
+      let toolResult;
+      try {
+        const endpoint = toolName === 'get_availability' ? 'get-availability' : 'book-appointment';
+        const toolResp = await fetch(
+          `https://purevision-backend-production.up.railway.app/tools/${endpoint}`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(toolInput)
+          }
+        );
+        toolResult = await toolResp.json();
+      } catch(e) {
+        toolResult = { error: 'Tool call failed: ' + e.message };
+      }
+
+      console.log(`[SMS Agent] Tool result:`, toolResult);
+
+      currentMessages = [
+        ...currentMessages,
+        { role: 'assistant', content },
+        {
+          role: 'user',
+          content: [{
+            type: 'tool_result',
+            tool_use_id: toolUse.id,
+            content: JSON.stringify(toolResult)
+          }]
+        }
+      ];
+
+      continue;
+    }
+
+    const textBlock = content.find(b => b.type === 'text');
+    return textBlock?.text || null;
+  }
+}
+
+// ─── SEND SMS HELPER ──────────────────────────────────────────────────────────
+async function sendSMS(to, message) {
+  try {
+    const resp = await fetch('https://api.openphone.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Authorization': process.env.OPENPHONE_API_KEY,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        from: process.env.OPENPHONE_NUMBER,
+        to: to,
+        content: message
+      })
+    });
+    const data = await resp.json();
+    console.log('[SMS] Sent to', to, ':', JSON.stringify(data));
+    return data;
+  } catch(e) {
+    console.error('[SMS] Failed:', e.message);
+  }
+}
+
+// ─── INBOUND SMS WEBHOOK ──────────────────────────────────────────────────────
+app.post('/webhook/sms/inbound', async (req, res) => {
+  res.sendStatus(200);
+
+  try {
+    const { data } = req.body;
+    const from = data?.object?.from;
+    const content = data?.object?.content;
+
+    if (!from || !content) return;
+
+    console.log(`[SMS Inbound] From: ${from} — "${content}"`);
+
+    const lead = db.prepare(`
+      SELECT * FROM leads 
+      WHERE replace(replace(replace(lead_phone, '+', ''), '-', ''), ' ', '') 
+        LIKE '%' || replace(replace(replace(?, '+', ''), '-', ''), ' ', '') || '%'
+      ORDER BY created_at DESC LIMIT 1
+    `).get(from);
+
+    if (!lead) {
+      console.log('[SMS] No lead found for', from);
+      return;
+    }
+
+    const history = db.prepare(`
+      SELECT * FROM sms_messages 
+      WHERE lead_id = ? ORDER BY created_at ASC
+    `).all(lead.id);
+
+    const messages = history.map(m => ({
+      role: m.direction === 'outbound' ? 'assistant' : 'user',
+      content: m.body
+    }));
+    messages.push({ role: 'user', content });
+
+    const reply = await runSMSAgent(messages, lead);
+    if (!reply) return;
+
+    await sendSMS(from, reply);
+
+    db.prepare(`INSERT INTO sms_messages (lead_id, direction, body) VALUES (?, ?, ?)`)
+      .run(lead.id, 'inbound', content);
+    db.prepare(`INSERT INTO sms_messages (lead_id, direction, body) VALUES (?, ?, ?)`)
+      .run(lead.id, 'outbound', reply);
+
+    console.log(`[SMS] Replied to ${lead.lead_name}: "${reply}"`);
+
+  } catch(e) {
+    console.error('[SMS Inbound] Error:', e.message);
+  }
+});
+
 // ─── ROUTE: RETELL CALL OUTCOME ───────────────────────────────────────────────
 app.post("/webhook/retell/call-ended", async (req, res) => {
-
-  const event     = req.body.event;
-  const call      = req.body.call;
-  const call_id   = call?.call_id;
-  const status    = call?.call_status;
-
-  // Only process events we care about — ignore call_started and call_analyzed
+  const event   = req.body.event;
+  const call    = req.body.call;
+  const call_id = call?.call_id;
+  const status  = call?.call_status;
   if (event !== "call_ended" && status !== "ended" && status !== "error" &&
       status !== "no_answer" && status !== "busy") {
     return res.status(200).json({ ok: true });
@@ -433,9 +684,7 @@ app.post("/webhook/retell/call-ended", async (req, res) => {
 
   console.log(`[Retell] Call ended — id: ${call_id}, status: ${status}`);
 
-  if (!call_id) {
-    return res.status(200).json({ ok: true });
-  }
+  if (!call_id) return res.status(200).json({ ok: true });
 
   const lead = db.prepare(`SELECT * FROM leads WHERE call_id = ?`).get(call_id);
 
@@ -454,12 +703,51 @@ app.post("/webhook/retell/call-ended", async (req, res) => {
 
   const newStatus = statusMap[status] || "completed";
 
-  db.prepare(`UPDATE leads SET call_status = ? WHERE id = ?`)
-    .run(newStatus, lead.id);
+  if (newStatus === 'no_answer' || newStatus === 'call_failed') {
+    const attempts = (lead.call_attempts || 0) + 1;
 
-  console.log(`[Retell] Lead ${lead.id} — ${lead.lead_name} → ${newStatus}`);
+    db.prepare(`UPDATE leads SET call_attempts = ?, call_status = ? WHERE id = ?`)
+      .run(attempts, newStatus, lead.id);
 
-  res.status(200).json({ ok: true });
+    if (attempts === 1) {
+      // First no answer — double dial after 2 minutes
+      console.log(`[Retry] Double dial for ${lead.lead_name} in 2 min`);
+      setTimeout(async () => {
+        try {
+          const shop = SHOP_CONFIGS[lead.shop_id];
+          const callResult = await triggerRetellCall({
+            leadName:    lead.lead_name,
+            leadPhone:   lead.lead_phone,
+            leadVehicle: lead.lead_vehicle,
+            leadSpecial: lead.lead_special,
+          }, shop);
+          db.prepare(`UPDATE leads SET call_id = ?, call_status = 'calling' WHERE id = ?`)
+            .run(callResult.call_id, lead.id);
+          console.log(`[Retry] Double dial triggered for ${lead.lead_name}`);
+        } catch(e) {
+          console.error(`[Retry] Double dial failed:`, e.message);
+        }
+      }, 2 * 60 * 1000);
+
+    } else if (attempts >= 2) {
+      // Two failed calls — send SMS fallback
+      console.log(`[SMS Fallback] Sending to ${lead.lead_name} after ${attempts} failed calls`);
+      const msg = `Hey ${lead.lead_name}! This is Marissa from Pure Vision Tints 🚗 We tried reaching you about tinting your ${lead.lead_vehicle} but couldn't connect. Still interested? Just reply here and I'll get you taken care of real quick 👍`;
+      await sendSMS(lead.lead_phone, msg);
+      db.prepare(`INSERT INTO sms_messages (lead_id, direction, body) VALUES (?, ?, ?)`)
+        .run(lead.id, 'outbound', msg);
+      db.prepare(`UPDATE leads SET call_status = 'sms_fallback' WHERE id = ?`)
+        .run(lead.id);
+    }
+
+  } else {
+    // Completed or other status — just update normally
+    db.prepare(`UPDATE leads SET call_status = ? WHERE id = ?`)
+      .run(newStatus, lead.id);
+  }
+
+  console.log(`[Retell] Lead ${lead.lead_name} updated to: ${newStatus}`);
+  return res.status(200).json({ ok: true });
 });
 
 // ─── ROUTE: GET AVAILABILITY ──────────────────────────────────────────────────
@@ -647,9 +935,6 @@ app.get('/dashboard/data/:shopId', async (req, res) => {
 
   try {
     const rawKey = process.env.GOOGLE_PRIVATE_KEY;
-    console.log('[Calendar] Key starts with:', rawKey?.slice(0,30));
-    console.log('[Calendar] Key length:', rawKey?.length);
-    console.log('[Calendar] Service account:', process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL);
     // Leads from SQLite
     const leads = db.prepare(
       'SELECT * FROM leads WHERE shop_id = ? ORDER BY created_at DESC'
