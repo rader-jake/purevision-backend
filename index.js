@@ -538,7 +538,7 @@ async function runSMSAgent(messages, lead) {
         'anthropic-version': '2023-06-01'
       },
       body: JSON.stringify({
-        model: 'claude-sonnet-4-20250514',
+        model: 'claude-sonnet-4-5',
         max_tokens: 500,
         system: buildSMSSystemPrompt(lead),
         tools: smsTools,
@@ -547,6 +547,7 @@ async function runSMSAgent(messages, lead) {
     });
 
     const aiData = await aiResp.json();
+    console.log('[SMS Agent] Claude response:', JSON.stringify(aiData, null, 2));
     const { content, stop_reason } = aiData;
 
     if (stop_reason === 'tool_use') {
