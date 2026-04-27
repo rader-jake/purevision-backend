@@ -626,7 +626,7 @@ app.post('/webhook/sms/inbound', async (req, res) => {
   console.log('[SMS Inbound] Raw body:', JSON.stringify(req.body, null, 2));
 
   try {
-    const from = req.body.from;
+    const from = req.body.from_number;
     const content = req.body.content;
 
     if (!from || !content) return;
