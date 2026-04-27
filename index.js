@@ -608,6 +608,7 @@ async function sendSMS(to, message) {
       },
       body: JSON.stringify({
         number: to,
+        from_number: process.env.SENDBLUE_NUMBER,
         content: message
       })
     });
