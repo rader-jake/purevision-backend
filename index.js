@@ -599,20 +599,20 @@ async function runSMSAgent(messages, lead) {
 // ─── SEND SMS HELPER ──────────────────────────────────────────────────────────
 async function sendSMS(to, message) {
   try {
-    const resp = await fetch('https://api.openphone.com/v1/messages', {
+    const resp = await fetch('https://api.sendblue.co/api/send-message', {
       method: 'POST',
       headers: {
-        'Authorization': process.env.OPENPHONE_API_KEY,
+        'sb-api-key-id': process.env.SENDBLUE_API_KEY,
+        'sb-api-secret-key': process.env.SENDBLUE_API_SECRET,
         'Content-Type': 'application/json'
       },
       body: JSON.stringify({
-        from: process.env.OPENPHONE_NUMBER,
-        to: to,
+        number: to,
         content: message
       })
     });
     const data = await resp.json();
-    console.log('[SMS] Sent to', to, ':', JSON.stringify(data));
+    console.log('[SMS] Sent via Sendblue:', JSON.stringify(data));
     return data;
   } catch(e) {
     console.error('[SMS] Failed:', e.message);
@@ -624,9 +624,8 @@ app.post('/webhook/sms/inbound', async (req, res) => {
   res.sendStatus(200);
 
   try {
-    const { data } = req.body;
-    const from = data?.object?.from;
-    const content = data?.object?.content;
+    const from = req.body.from;
+    const content = req.body.content;
 
     if (!from || !content) return;
 
