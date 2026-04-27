@@ -623,6 +623,7 @@ async function sendSMS(to, message) {
 // ─── INBOUND SMS WEBHOOK ──────────────────────────────────────────────────────
 app.post('/webhook/sms/inbound', async (req, res) => {
   res.sendStatus(200);
+  console.log('[SMS Inbound] Raw body:', JSON.stringify(req.body, null, 2));
 
   try {
     const from = req.body.from;
