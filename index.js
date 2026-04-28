@@ -627,8 +627,8 @@ async function sendSMS(to, message) {
 app.post('/webhook/sms/inbound',
   express.raw({ type: 'application/json' }),
   async (req, res) => {
-    const signature = req.headers['x-blooio-signature'] ?? '';
-    const event = req.headers['x-blooio-event'] ?? '';
+    // const signature = req.headers['x-blooio-signature'] ?? '';
+    // const event = req.headers['x-blooio-event'] ?? '';
 
     const rawBody = Buffer.isBuffer(req.body) ? req.body : Buffer.from(JSON.stringify(req.body));
 
