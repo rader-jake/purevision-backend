@@ -627,12 +627,14 @@ async function sendSMS(to, message) {
 app.post('/webhook/sms/inbound',
   express.raw({ type: 'application/json' }),
   async (req, res) => {
-    // Verify signature
     const signature = req.headers['x-blooio-signature'] ?? '';
     const event = req.headers['x-blooio-event'] ?? '';
+
+    const rawBody = Buffer.isBuffer(req.body) ? req.body : Buffer.from(JSON.stringify(req.body));
+
     const expected = crypto
       .createHmac('sha256', process.env.BLOOIO_SECRET)
-      .update(req.body)
+      .update(rawBody)
       .digest('hex');
 
     if (!crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(signature))) {
@@ -644,14 +646,7 @@ app.post('/webhook/sms/inbound',
 
     if (event !== 'message.received') return;
 
-    const rawBody = Buffer.isBuffer(req.body) ? req.body : Buffer.from(JSON.stringify(req.body));
-    const expected = crypto
-      .createHmac('sha256', process.env.BLOOIO_SECRET)
-      .update(rawBody)
-      .digest('hex');
-
     try {
-      // const payload = JSON.parse(req.body.toString('utf8'));
       const payload = JSON.parse(rawBody.toString('utf8'));
       const from = payload.data?.from;
       const content = payload.data?.text;
