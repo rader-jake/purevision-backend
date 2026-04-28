@@ -4,6 +4,7 @@ import Database from "better-sqlite3";
 import twilio from "twilio";
 import { google } from "googleapis";
 import cors from "cors";
+import crypto from 'node:crypto';
 
 dotenv.config();
 
@@ -599,79 +600,96 @@ async function runSMSAgent(messages, lead) {
 // ─── SEND SMS HELPER ──────────────────────────────────────────────────────────
 async function sendSMS(to, message) {
   try {
-    const resp = await fetch('https://api.sendblue.co/api/send-message', {
+    // Blooio requires phone number URL-encoded in the path
+    const encodedTo = encodeURIComponent(to);
+    const resp = await fetch(`https://backend.blooio.com/v2/api/chats/${encodedTo}/messages`, {
       method: 'POST',
       headers: {
-        'sb-api-key-id': process.env.SENDBLUE_API_KEY,
-        'sb-api-secret-key': process.env.SENDBLUE_API_SECRET,
-        'Content-Type': 'application/json'
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${process.env.BLOOIO_API_KEY}`
       },
       body: JSON.stringify({
-        number: to,
-        from_number: process.env.SENDBLUE_NUMBER,
-        content: message
+        text: message,
+        from_number: process.env.BLOOIO_NUMBER
       })
     });
     const data = await resp.json();
-    console.log('[SMS] Sent via Sendblue:', JSON.stringify(data));
+    console.log('[SMS] Sent via Blooio:', JSON.stringify(data));
     return data;
   } catch(e) {
     console.error('[SMS] Failed:', e.message);
   }
 }
-
 // ─── INBOUND SMS WEBHOOK ──────────────────────────────────────────────────────
-app.post('/webhook/sms/inbound', async (req, res) => {
-  res.sendStatus(200);
-  console.log('[SMS Inbound] Raw body:', JSON.stringify(req.body, null, 2));
+app.post('/webhook/sms/inbound',
+  express.raw({ type: 'application/json' }),
+  async (req, res) => {
+    // Verify signature
+    const signature = req.headers['x-blooio-signature'] ?? '';
+    const event = req.headers['x-blooio-event'] ?? '';
+    const expected = crypto
+      .createHmac('sha256', process.env.BLOOIO_SECRET)
+      .update(req.body)
+      .digest('hex');
 
-  try {
-    const from = req.body.from_number;
-    const content = req.body.content;
-
-    if (!from || !content) return;
-
-    console.log(`[SMS Inbound] From: ${from} — "${content}"`);
-
-    const lead = db.prepare(`
-      SELECT * FROM leads 
-      WHERE replace(replace(replace(lead_phone, '+', ''), '-', ''), ' ', '') 
-        LIKE '%' || replace(replace(replace(?, '+', ''), '-', ''), ' ', '') || '%'
-      ORDER BY created_at DESC LIMIT 1
-    `).get(from);
-
-    if (!lead) {
-      console.log('[SMS] No lead found for', from);
-      return;
+    if (!crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(signature))) {
+      console.log('[SMS] Invalid Blooio signature — rejected');
+      return res.sendStatus(401);
     }
 
-    const history = db.prepare(`
-      SELECT * FROM sms_messages 
-      WHERE lead_id = ? ORDER BY created_at ASC
-    `).all(lead.id);
+    res.sendStatus(200);
 
-    const messages = history.map(m => ({
-      role: m.direction === 'outbound' ? 'assistant' : 'user',
-      content: m.body
-    }));
-    messages.push({ role: 'user', content });
+    if (event !== 'message.received') return;
 
-    const reply = await runSMSAgent(messages, lead);
-    if (!reply) return;
+    try {
+      const payload = JSON.parse(req.body.toString('utf8'));
+      const from = payload.data?.from;
+      const content = payload.data?.text;
 
-    await sendSMS(from, reply);
+      if (!from || !content) return;
 
-    db.prepare(`INSERT INTO sms_messages (lead_id, direction, body) VALUES (?, ?, ?)`)
-      .run(lead.id, 'inbound', content);
-    db.prepare(`INSERT INTO sms_messages (lead_id, direction, body) VALUES (?, ?, ?)`)
-      .run(lead.id, 'outbound', reply);
+      console.log(`[SMS Inbound] From: ${from} — "${content}"`);
 
-    console.log(`[SMS] Replied to ${lead.lead_name}: "${reply}"`);
+      const lead = db.prepare(`
+        SELECT * FROM leads 
+        WHERE replace(replace(replace(lead_phone, '+', ''), '-', ''), ' ', '') 
+          LIKE '%' || replace(replace(replace(?, '+', ''), '-', ''), ' ', '') || '%'
+        ORDER BY created_at DESC LIMIT 1
+      `).get(from);
 
-  } catch(e) {
-    console.error('[SMS Inbound] Error:', e.message);
+      if (!lead) {
+        console.log('[SMS] No lead found for', from);
+        return;
+      }
+
+      const history = db.prepare(`
+        SELECT * FROM sms_messages 
+        WHERE lead_id = ? ORDER BY created_at ASC
+      `).all(lead.id);
+
+      const messages = history.map(m => ({
+        role: m.direction === 'outbound' ? 'assistant' : 'user',
+        content: m.body
+      }));
+      messages.push({ role: 'user', content });
+
+      const reply = await runSMSAgent(messages, lead);
+      if (!reply) return;
+
+      await sendSMS(from, reply);
+
+      db.prepare(`INSERT INTO sms_messages (lead_id, direction, body) VALUES (?, ?, ?)`)
+        .run(lead.id, 'inbound', content);
+      db.prepare(`INSERT INTO sms_messages (lead_id, direction, body) VALUES (?, ?, ?)`)
+        .run(lead.id, 'outbound', reply);
+
+      console.log(`[SMS] Replied to ${lead.lead_name}: "${reply}"`);
+
+    } catch(e) {
+      console.error('[SMS Inbound] Error:', e.message);
+    }
   }
-});
+);
 
 // ─── ROUTE: RETELL CALL OUTCOME ───────────────────────────────────────────────
 app.post("/webhook/retell/call-ended", async (req, res) => {
