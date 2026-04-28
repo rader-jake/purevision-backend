@@ -101,6 +101,9 @@ function getCentralHour(date) {
   );
 }
 
+app.use('/webhook/sms/inbound', express.raw({ type: 'application/json' }));
+
+
 
 // ─── MIDDLEWARE ───────────────────────────────────────────────────────────────
 app.use(express.json());
@@ -641,8 +644,15 @@ app.post('/webhook/sms/inbound',
 
     if (event !== 'message.received') return;
 
+    const rawBody = Buffer.isBuffer(req.body) ? req.body : Buffer.from(JSON.stringify(req.body));
+    const expected = crypto
+      .createHmac('sha256', process.env.BLOOIO_SECRET)
+      .update(rawBody)
+      .digest('hex');
+
     try {
-      const payload = JSON.parse(req.body.toString('utf8'));
+      // const payload = JSON.parse(req.body.toString('utf8'));
+      const payload = JSON.parse(rawBody.toString('utf8'));
       const from = payload.data?.from;
       const content = payload.data?.text;
 
