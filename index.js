@@ -941,7 +941,7 @@ app.post("/demo/call", async (req, res) => {
         "Authorization": `Bearer ${process.env.RETELL_API_KEY}`,
       },
       body: JSON.stringify({
-        fromNumber: process.env.SHOPDESK_DEMO_PHONE,
+        from_number: process.env.SHOPDESK_DEMO_PHONE,
         to_number:   phone,
         agent_id:    process.env.SHOPDESK_DEMO_AGENT_ID,
         retell_llm_dynamic_variables: {
