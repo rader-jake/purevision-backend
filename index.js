@@ -637,30 +637,41 @@ app.post('/webhook/sms/inbound',
 
     // Only verify signature if one was provided (skip for testing)
    if (signature) {
-  const expected = crypto
-    .createHmac('sha256', process.env.BLOOIO_SECRET)
-    .update(rawBody)
-    .digest('hex');
+    try {
+      // Parse t=timestamp,v1=hash format
+      const parts = {};
+      signature.split(',').forEach(part => {
+        const [key, value] = part.split('=');
+        parts[key] = value;
+      });
 
-  console.log('[SMS] Signature received:', signature);
-  console.log('[SMS] Signature expected:', expected);
-  console.log('[SMS] Secret length:', process.env.BLOOIO_SECRET?.length);
-  console.log('[SMS] Raw body preview:', rawBody.toString('utf8').slice(0, 100));
+      const timestamp = parts['t'];
+      const v1 = parts['v1'];
 
-  try {
-    const expectedBuf = Buffer.from(expected, 'hex');
-    const signatureBuf = Buffer.from(signature, 'hex');
-    
-    if (expectedBuf.length !== signatureBuf.length || 
-        !crypto.timingSafeEqual(expectedBuf, signatureBuf)) {
-      console.log('[SMS] Invalid Blooio signature — rejected');
+      if (!timestamp || !v1) {
+        console.log('[SMS] Invalid signature format');
+        return res.sendStatus(401);
+      }
+
+      // Blooio signs timestamp + . + raw body
+      const signedPayload = `${timestamp}.${rawBody.toString('utf8')}`;
+      const expected = crypto
+        .createHmac('sha256', process.env.BLOOIO_SECRET)
+        .update(signedPayload)
+        .digest('hex');
+
+      console.log('[SMS] v1 received:', v1);
+      console.log('[SMS] expected:', expected);
+
+      if (expected !== v1) {
+        console.log('[SMS] Invalid Blooio signature — rejected');
+        return res.sendStatus(401);
+      }
+    } catch(e) {
+      console.log('[SMS] Signature check failed:', e.message);
       return res.sendStatus(401);
     }
-  } catch(e) {
-    console.log('[SMS] Signature check failed:', e.message);
-    return res.sendStatus(401);
   }
-}
 
     res.sendStatus(200);
 
