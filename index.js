@@ -676,14 +676,15 @@ app.post('/webhook/sms/inbound',
 
     res.sendStatus(200);
 
-    if (event !== 'message.received') 
+    if (event !== 'message.received') {
       console.log('[SMS] Ignoring event type:', event);
       return;
+    }
 
     try {
       const payload = JSON.parse(rawBody.toString('utf8'));
-      const from = payload.data?.from;
-      const content = payload.data?.text;
+      const from = payload.data?.from || payload.external_id;
+      const content = payload.data?.text || payload.text;
 
       if (!from || !content) return;
 
