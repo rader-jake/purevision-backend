@@ -637,21 +637,25 @@ app.post('/webhook/sms/inbound',
 
     // Only verify signature if one was provided (skip for testing)
     if (signature) {
-      const expected = crypto
-        .createHmac('sha256', process.env.BLOOIO_SECRET)
-        .update(rawBody)
-        .digest('hex');
+  const expected = crypto
+    .createHmac('sha256', process.env.BLOOIO_SECRET)
+    .update(rawBody)
+    .digest('hex');
 
-      try {
-        if (!crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(signature))) {
-          console.log('[SMS] Invalid Blooio signature — rejected');
-          return res.sendStatus(401);
-        }
-      } catch(e) {
-        console.log('[SMS] Signature check failed:', e.message);
-        return res.sendStatus(401);
-      }
+  try {
+    const expectedBuf = Buffer.from(expected, 'hex');
+    const signatureBuf = Buffer.from(signature, 'hex');
+    
+    if (expectedBuf.length !== signatureBuf.length || 
+        !crypto.timingSafeEqual(expectedBuf, signatureBuf)) {
+      console.log('[SMS] Invalid Blooio signature — rejected');
+      return res.sendStatus(401);
     }
+  } catch(e) {
+    console.log('[SMS] Signature check failed:', e.message);
+    return res.sendStatus(401);
+  }
+}
 
     res.sendStatus(200);
 
