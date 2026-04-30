@@ -636,11 +636,16 @@ app.post('/webhook/sms/inbound',
     const event = req.headers['x-blooio-event'] ?? 'message.received';
 
     // Only verify signature if one was provided (skip for testing)
-    if (signature) {
+   if (signature) {
   const expected = crypto
     .createHmac('sha256', process.env.BLOOIO_SECRET)
     .update(rawBody)
     .digest('hex');
+
+  console.log('[SMS] Signature received:', signature);
+  console.log('[SMS] Signature expected:', expected);
+  console.log('[SMS] Secret length:', process.env.BLOOIO_SECRET?.length);
+  console.log('[SMS] Raw body preview:', rawBody.toString('utf8').slice(0, 100));
 
   try {
     const expectedBuf = Buffer.from(expected, 'hex');
