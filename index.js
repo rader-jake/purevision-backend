@@ -633,7 +633,8 @@ app.post('/webhook/sms/inbound',
     const rawBody = Buffer.isBuffer(req.body) ? req.body : Buffer.from(JSON.stringify(req.body));
 
     const signature = req.headers['x-blooio-signature'] ?? '';
-    const event = req.headers['x-blooio-event'] ?? 'message.received';
+    const payload_preview = JSON.parse(rawBody.toString('utf8'));
+    const event = req.headers['x-blooio-event'] || payload_preview.event || '';
 
     // Only verify signature if one was provided (skip for testing)
    if (signature) {
@@ -675,7 +676,9 @@ app.post('/webhook/sms/inbound',
 
     res.sendStatus(200);
 
-    if (event !== 'message.received') return;
+    if (event !== 'message.received') 
+      console.log('[SMS] Ignoring event type:', event);
+      return;
 
     try {
       const payload = JSON.parse(rawBody.toString('utf8'));
