@@ -60,6 +60,17 @@ const SHOP_CONFIGS = {
       leadSpecial: "lead_special_override",
     },
   },
+  "southwest-epoxy": {
+  shopId:     "southwest-epoxy",
+  shopName:   "Southwest Epoxy",
+  retellAgentId: null, // SMS only for now
+  fieldMapping: {
+    leadName:    "first_name",
+    leadPhone:   "phone",
+    leadVehicle: "project_type",
+    leadSpecial: "lead_special_override",
+  },
+},
 };
 
 // ─── TWILIO CLIENT ────────────────────────────────────────────────────────────
@@ -623,6 +634,36 @@ async function sendSMS(to, message) {
     console.error('[SMS] Failed:', e.message);
   }
 }
+
+// SMS-ONLY WEBHOOK FOR SOUTHWEST EPOXY (NO CALLS) ─────────────────────────────────
+
+app.post("/webhook/sms-only/:shopId", async (req, res) => {
+  const { shopId } = req.params;
+  const shop = SHOP_CONFIGS[shopId];
+  if (!shop) return res.status(404).json({ error: "Shop not found" });
+
+  const lead = mapLead(req.body, shop.fieldMapping);
+  if (!lead.leadPhone) return res.status(400).json({ error: "No phone" });
+
+  const result = db.prepare(`
+    INSERT INTO leads (shop_id, lead_name, lead_phone, lead_vehicle, lead_special)
+    VALUES (?, ?, ?, ?, ?)
+  `).run(shopId, lead.leadName, lead.leadPhone, lead.leadVehicle, lead.leadSpecial);
+
+  const leadId = result.lastInsertRowid;
+  res.status(200).json({ received: true, leadId });
+
+  // Fire SMS immediately instead of calling
+  const msg = `Hey ${lead.leadName}! This is Alex from ${shop.shopName} 👋 You just reached out about an epoxy project — I'd love to help get you a free quote. What type of project are you looking at?`;
+  await sendSMS(lead.leadPhone, msg);
+  
+  db.prepare(`INSERT INTO sms_messages (lead_id, direction, body) VALUES (?, ?, ?)`)
+    .run(leadId, 'outbound', msg);
+  
+  console.log(`[${shopId}] SMS sent to ${lead.leadName}`);
+});
+
+
 // ─── INBOUND SMS WEBHOOK ──────────────────────────────────────────────────────
 app.post('/webhook/sms/inbound',
   express.raw({ type: 'application/json' }),
