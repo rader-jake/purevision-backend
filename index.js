@@ -484,42 +484,6 @@ function buildSMSSystemPrompt(lead) {
 
   function buildSMSSystemPrompt(lead) {
 
-    function getSMSTools(lead) {
-  if (lead.shop_id === 'southwest-epoxy') {
-    return [
-      {
-        name: "get_epoxy_availability",
-        description: "Check available estimate slots for a given date",
-        input_schema: {
-          type: "object",
-          properties: {
-            date: { type: "string", description: "Date in YYYY-MM-DD format" }
-          },
-          required: ["date"]
-        }
-      },
-      {
-        name: "book_estimate",
-        description: "Book a free in-home estimate for the lead",
-        input_schema: {
-          type: "object",
-          properties: {
-            lead_name: { type: "string" },
-            lead_phone: { type: "string" },
-            lead_address: { type: "string", description: "Full address where estimate will take place" },
-            project_type: { type: "string" },
-            appointment_time: { type: "string", description: "Format: YYYY-MM-DD HH:mm" }
-          },
-          required: ["lead_name", "lead_phone", "lead_address", "appointment_time"]
-        }
-      }
-    ];
-  }
-
-  // Pure Vision tools
-  return smsTools;
-}
-
   if (lead.shop_id === 'southwest-epoxy') {
     return `You are Alex, Southwest Epoxy Flooring's AI assistant texting with a lead.
 
@@ -631,6 +595,42 @@ RULES
 - Keep every reply to 1-3 sentences — this is SMS not email
 - Today's date is ${new Date().toLocaleDateString('en-US', { timeZone: 'America/Chicago' })}`;
 }
+
+// SMS TOOL
+
+function getSMSTools(lead) {
+      if (lead.shop_id === 'southwest-epoxy') {
+        return [
+          {
+            name: "get_epoxy_availability",
+            description: "Check available estimate slots for a given date",
+            input_schema: {
+              type: "object",
+              properties: {
+                date: { type: "string", description: "Date in YYYY-MM-DD format" }
+              },
+              required: ["date"]
+            }
+          },
+          {
+            name: "book_estimate",
+            description: "Book a free in-home estimate for the lead",
+            input_schema: {
+              type: "object",
+              properties: {
+                lead_name: { type: "string" },
+                lead_phone: { type: "string" },
+                lead_address: { type: "string", description: "Full address where estimate will take place" },
+                project_type: { type: "string" },
+                appointment_time: { type: "string", description: "Format: YYYY-MM-DD HH:mm" }
+              },
+              required: ["lead_name", "lead_phone", "lead_address", "appointment_time"]
+            }
+          }
+        ];
+      }
+      return smsTools;
+    }
 
 // ─── SMS AGENT LOOP ───────────────────────────────────────────────────────────
 async function runSMSAgent(messages, lead) {
