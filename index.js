@@ -1350,6 +1350,29 @@ app.post('/tools/book-estimate', async (req, res) => {
   }
 });
 
+// DELETE TEST LEADS
+
+app.post('/admin/delete-test-leads', (req, res) => {
+  const { secret, phone } = req.body;
+  if (secret !== process.env.MANUAL_ENTRY_SECRET) {
+    return res.status(403).json({ error: 'Unauthorized' });
+  }
+
+  if (phone) {
+    // Delete specific phone number
+    const lead = db.prepare(`SELECT id FROM leads WHERE lead_phone = ?`).get(phone);
+    if (lead) {
+      db.prepare(`DELETE FROM sms_messages WHERE lead_id = ?`).run(lead.id);
+      db.prepare(`DELETE FROM leads WHERE id = ?`).run(lead.id);
+      console.log(`[Admin] Deleted lead and messages for ${phone}`);
+      return res.json({ success: true, deleted: phone });
+    }
+    return res.json({ success: false, message: 'Lead not found' });
+  }
+
+  return res.status(400).json({ error: 'Phone number required' });
+});
+
 // ─── ROUTE: MANUAL LEAD ENTRY ─────────────────────────────────────────────────
 app.post("/leads/manual", async (req, res) => {
   const { name, phone, vehicle, special, secret } = req.body;
