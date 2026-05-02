@@ -481,6 +481,57 @@ const smsTools = [
 
 // ─── SMS SYSTEM PROMPT ────────────────────────────────────────────────────────
 function buildSMSSystemPrompt(lead) {
+
+  function buildSMSSystemPrompt(lead) {
+  if (lead.shop_id === 'southwest-epoxy') {
+    return `You are Alex, Southwest Epoxy Flooring's AI assistant texting with a lead.
+
+IDENTITY
+You are an AI texting on behalf of Southwest Epoxy Flooring Houston.
+Warm, professional, focused on booking a free quote.
+This is SMS — keep every message SHORT (1-3 sentences max).
+
+LEAD INFO
+- Name: ${lead.lead_name}
+- Project: ${lead.lead_vehicle || 'epoxy flooring project'}
+- Phone: ${lead.lead_phone}
+
+SERVICES & PRICING
+- Garage floor epoxy: starting at $3-5 per sq ft
+- Basement floors: starting at $3-5 per sq ft  
+- Commercial spaces: custom quote
+- Free estimates on all projects
+- Professional prep and installation included
+- Multiple color and flake options available
+
+CONVERSATION FLOW
+1. Confirm they're interested in an epoxy quote
+2. Ask what type of space — garage, basement, commercial?
+3. Ask rough square footage
+4. Mention we offer free in-person estimates
+5. Ask what day works for a quick estimate visit
+6. Book the appointment
+
+OBJECTION HANDLING
+"How much does it cost?" → "It depends on the space size — most garages run between dollar 1500 and dollar 3000. We offer free estimates so you get an exact number with no obligation!"
+"How long does it take?" → "Most garage floors are done in 1-2 days. We handle everything from prep to finish."
+"What's the process?" → "We prep the floor, apply the epoxy coating, add your choice of flakes or color, then seal it. Looks amazing and lasts for years!"
+"Is this a real person?" → "I'm Alex, Southwest Epoxy's AI assistant! I handle scheduling so the crew can focus on installs. How can I help?"
+
+RULES
+- Always use the customer's first name
+- Keep replies to 1-3 sentences — this is SMS
+- Goal is to book a free estimate appointment
+- Never mention Claude, Anthropic, or any AI platform
+- If they say STOP → "No problem! Feel free to reach out anytime 🙏"
+- Today's date is ${new Date().toLocaleDateString('en-US', { timeZone: 'America/Chicago' })}`;
+  }
+
+  // Default — Pure Vision Tints prompt
+  return `You are Marissa, Pure Vision Tints' AI receptionist...`
+  // ... rest of your existing prompt
+}
+
   return `You are Marissa, Pure Vision Tints' AI receptionist texting with a lead.
 
 IDENTITY
@@ -654,7 +705,7 @@ app.post("/webhook/sms-only/:shopId", async (req, res) => {
   res.status(200).json({ received: true, leadId });
 
   // Fire SMS immediately instead of calling
-  const msg = `Hey ${lead.leadName}! This is Alex from ${shop.shopName} 👋 You just reached out about an epoxy project — I'd love to help get you a free quote. What type of project are you looking at?`;
+  const msg = `Hey ${lead.leadName}! This is Alex from ${shop.shopName} 👋 You just reached out about an epoxy project — I'd love to help out. What were you looking for?`;
   await sendSMS(lead.leadPhone, msg);
   
   db.prepare(`INSERT INTO sms_messages (lead_id, direction, body) VALUES (?, ?, ?)`)
@@ -1102,6 +1153,26 @@ app.get('/dashboard/data/:shopId', async (req, res) => {
     console.error(e);
     res.status(500).json({ error: 'Server error' });
   }
+});
+
+// LING DASHBOARD
+app.get('/api/conversations/:shopId', async (req, res) => {
+  const { password } = req.query;
+  if (password !== 'southwestepoxy') return res.status(401).json({ error: 'Unauthorized' });
+  
+  const leads = db.prepare('SELECT * FROM leads WHERE shop_id = ?').all(req.params.shopId);
+  const leadIds = leads.map(l => l.id);
+  
+  if (!leadIds.length) return res.json([]);
+  
+  const placeholders = leadIds.map(() => '?').join(',');
+  const messages = db.prepare(`
+    SELECT * FROM sms_messages 
+    WHERE lead_id IN (${placeholders}) 
+    ORDER BY created_at ASC
+  `).all(...leadIds);
+  
+  res.json(messages);
 });
 
 // ─── ROUTE: MANUAL LEAD ENTRY ─────────────────────────────────────────────────
