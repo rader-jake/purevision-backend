@@ -483,48 +483,89 @@ const smsTools = [
 function buildSMSSystemPrompt(lead) {
 
   function buildSMSSystemPrompt(lead) {
+
+    function getSMSTools(lead) {
+  if (lead.shop_id === 'southwest-epoxy') {
+    return [
+      {
+        name: "get_epoxy_availability",
+        description: "Check available estimate slots for a given date",
+        input_schema: {
+          type: "object",
+          properties: {
+            date: { type: "string", description: "Date in YYYY-MM-DD format" }
+          },
+          required: ["date"]
+        }
+      },
+      {
+        name: "book_estimate",
+        description: "Book a free in-home estimate for the lead",
+        input_schema: {
+          type: "object",
+          properties: {
+            lead_name: { type: "string" },
+            lead_phone: { type: "string" },
+            lead_address: { type: "string", description: "Full address where estimate will take place" },
+            project_type: { type: "string" },
+            appointment_time: { type: "string", description: "Format: YYYY-MM-DD HH:mm" }
+          },
+          required: ["lead_name", "lead_phone", "lead_address", "appointment_time"]
+        }
+      }
+    ];
+  }
+
+  // Pure Vision tools
+  return smsTools;
+}
+
   if (lead.shop_id === 'southwest-epoxy') {
     return `You are Alex, Southwest Epoxy Flooring's AI assistant texting with a lead.
 
-IDENTITY
-You are an AI texting on behalf of Southwest Epoxy Flooring Houston.
-Warm, professional, focused on booking a free quote.
-This is SMS — keep every message SHORT (1-3 sentences max).
+    IDENTITY
+    You are an AI texting on behalf of Southwest Epoxy Flooring Houston.
+    Warm, professional, focused on booking a free quote.
+    This is SMS — keep every message SHORT (1-3 sentences max).
 
-LEAD INFO
-- Name: ${lead.lead_name}
-- Project: ${lead.lead_vehicle || 'epoxy flooring project'}
-- Phone: ${lead.lead_phone}
+    LEAD INFO
+    - Name: ${lead.lead_name}
+    - Project: ${lead.lead_vehicle || 'epoxy flooring project'}
+    - Phone: ${lead.lead_phone}
 
-SERVICES & PRICING
-- Garage floor epoxy: starting at $3-5 per sq ft
-- Basement floors: starting at $3-5 per sq ft  
-- Commercial spaces: custom quote
-- Free estimates on all projects
-- Professional prep and installation included
-- Multiple color and flake options available
+    SERVICES & PRICING
+    - Garage floor epoxy: starting at $3-5 per sq ft
+    - Basement floors: starting at $3-5 per sq ft  
+    - Commercial spaces: custom quote
+    - Free estimates on all projects
+    - Professional prep and installation included
+    - Multiple color and flake options available
 
-CONVERSATION FLOW
-1. Confirm they're interested in an epoxy quote
-2. Ask what type of space — garage, basement, commercial?
-3. Ask rough square footage
-4. Mention we offer free in-person estimates
-5. Ask what day works for a quick estimate visit
-6. Book the appointment
+    CONVERSATION FLOW
+    1. Confirm they are still interested in a free epoxy estimate
+    2. Ask what type of space — garage, basement, or commercial?
+    3. Ask rough square footage — "Roughly how big is the space?"
+    4. Ask for their address — "What's the address so Ling can come take a look?"
+    5. Ask what day works for the estimate
+    6. Call get_epoxy_availability with that date in YYYY-MM-DD format
+    7. Offer only slots the tool returns — never invent times
+    8. Confirm: "Perfect — I have Ling coming to [address] on [DAY] at [TIME] for a free estimate. Any questions?"
+    9. Only after they confirm, call book_estimate with all details
+    10. Close warmly
 
-OBJECTION HANDLING
-"How much does it cost?" → "It depends on the space size — most garages run between dollar 1500 and dollar 3000. We offer free estimates so you get an exact number with no obligation!"
-"How long does it take?" → "Most garage floors are done in 1-2 days. We handle everything from prep to finish."
-"What's the process?" → "We prep the floor, apply the epoxy coating, add your choice of flakes or color, then seal it. Looks amazing and lasts for years!"
-"Is this a real person?" → "I'm Alex, Southwest Epoxy's AI assistant! I handle scheduling so the crew can focus on installs. How can I help?"
+    OBJECTION HANDLING
+    "How much does it cost?" → "It depends on the space size — most garages run between dollar 1500 and dollar 3000. We offer free estimates so you get an exact number with no obligation!"
+    "How long does it take?" → "Most garage floors are done in 1-2 days. We handle everything from prep to finish."
+    "What's the process?" → "We prep the floor, apply the epoxy coating, add your choice of flakes or color, then seal it. Looks amazing and lasts for years!"
+    "Is this a real person?" → "I'm Alex, Southwest Epoxy's AI assistant! I handle scheduling so the crew can focus on installs. How can I help?"
 
-RULES
-- Always use the customer's first name
-- Keep replies to 1-3 sentences — this is SMS
-- Goal is to book a free estimate appointment
-- Never mention Claude, Anthropic, or any AI platform
-- If they say STOP → "No problem! Feel free to reach out anytime 🙏"
-- Today's date is ${new Date().toLocaleDateString('en-US', { timeZone: 'America/Chicago' })}`;
+    RULES
+    - Always use the customer's first name
+    - Keep replies to 1-3 sentences — this is SMS
+    - Goal is to book a free estimate appointment
+    - Never mention Claude, Anthropic, or any AI platform
+    - If they say STOP → "No problem! Feel free to reach out anytime 🙏"
+    - Today's date is ${new Date().toLocaleDateString('en-US', { timeZone: 'America/Chicago' })}`;
   }
 
   // Default — Pure Vision Tints prompt
@@ -594,6 +635,7 @@ RULES
 // ─── SMS AGENT LOOP ───────────────────────────────────────────────────────────
 async function runSMSAgent(messages, lead) {
   let currentMessages = [...messages];
+  const tools = getSMSTools(lead);
 
   while (true) {
     const aiResp = await fetch('https://api.anthropic.com/v1/messages', {
@@ -607,7 +649,7 @@ async function runSMSAgent(messages, lead) {
         model: 'claude-sonnet-4-5',
         max_tokens: 500,
         system: buildSMSSystemPrompt(lead),
-        tools: smsTools,
+        tools,
         messages: currentMessages
       })
     });
@@ -623,9 +665,17 @@ async function runSMSAgent(messages, lead) {
 
       console.log(`[SMS Agent] Tool call: ${toolName}`, toolInput);
 
+      // Map tool name to endpoint
+      const endpointMap = {
+        'get_availability': 'get-availability',
+        'book_appointment': 'book-appointment',
+        'get_epoxy_availability': 'get-epoxy-availability',
+        'book_estimate': 'book-estimate'
+      };
+
       let toolResult;
       try {
-        const endpoint = toolName === 'get_availability' ? 'get-availability' : 'book-appointment';
+        const endpoint = endpointMap[toolName];
         const toolResp = await fetch(
           `https://purevision-backend-production.up.railway.app/tools/${endpoint}`,
           {
@@ -1173,6 +1223,131 @@ app.get('/api/conversations/:shopId', async (req, res) => {
   `).all(...leadIds);
   
   res.json(messages);
+});
+
+// Ling calendar events
+app.post('/tools/get-epoxy-availability', async (req, res) => {
+  const raw = req.body;
+  const args = raw.args || raw;
+  const date = args.date;
+
+  console.log('[Epoxy Availability] Checking:', date);
+
+  if (!date) {
+    return res.json({
+      response: 'We have morning and afternoon slots available. What day works for you?',
+      available_slots: ['9AM', '12PM', '3PM', '6PM']
+    });
+  }
+
+  try {
+    const checkDate = new Date(date + 'T12:00:00-05:00');
+    const dateStr = getCentralDateString(checkDate);
+    const dayStart = new Date(`${dateStr}T00:00:00-05:00`);
+    const dayEnd = new Date(`${dateStr}T23:59:59-05:00`);
+
+    const response = await gcal.events.list({
+      calendarId: process.env.EPOXY_CALENDAR_ID,
+      timeMin: dayStart.toISOString(),
+      timeMax: dayEnd.toISOString(),
+      singleEvents: true,
+      orderBy: 'startTime',
+    });
+
+    const bookedHours = (response.data.items || []).map(e => {
+      const start = new Date(e.start.dateTime || e.start.date);
+      return getCentralHour(start);
+    });
+
+    const ESTIMATE_SLOTS = [
+      { label: '9AM', hour: 9 },
+      { label: '12PM', hour: 12 },
+      { label: '3PM', hour: 15 },
+      { label: '6PM', hour: 18 },
+    ];
+
+    const available = ESTIMATE_SLOTS.filter(s => !bookedHours.includes(s.hour));
+    const friendlyDate = checkDate.toLocaleDateString('en-US', {
+      weekday: 'long', month: 'long', day: 'numeric', timeZone: 'America/Chicago'
+    });
+
+    if (!available.length) {
+      return res.json({
+        response: `We're fully booked on ${friendlyDate}. Would another day work for you?`,
+        available_slots: []
+      });
+    }
+
+    return res.json({
+      response: `We have ${available.map(s => s.label).join(', ')} available on ${friendlyDate}. Which works best for you?`,
+      available_slots: available.map(s => s.label),
+      date: dateStr,
+      friendly_date: friendlyDate
+    });
+  } catch(e) {
+    console.error('[Epoxy Availability] Error:', e.message);
+    return res.json({
+      response: 'We have 9AM, 12PM, 3PM, and 6PM available. Which works for you?',
+      available_slots: ['9AM', '12PM', '3PM', '6PM']
+    });
+  }
+});
+
+// BOOK APPOINTMENT ROUTE FOR EPOXY ESTIMATES
+app.post('/tools/book-estimate', async (req, res) => {
+  const raw = req.body;
+  const args = raw.args || raw;
+  const { lead_name, lead_phone, lead_address, project_type, appointment_time } = args;
+
+  console.log('[Book Estimate] Called with:', JSON.stringify(args, null, 2));
+
+  if (!appointment_time) {
+    return res.json({
+      response: "I wasn't able to lock that in. Can you confirm the day and time again?",
+      success: false
+    });
+  }
+
+  try {
+    const dateTimeStr = appointment_time.includes('T')
+      ? appointment_time
+      : appointment_time.replace(' ', 'T') + ':00-05:00';
+
+    const appointmentDate = new Date(dateTimeStr);
+    const endDate = new Date(appointmentDate.getTime() + 60 * 60 * 1000); // 1 hour estimate
+
+    await gcal.events.insert({
+      calendarId: process.env.EPOXY_CALENDAR_ID,
+      requestBody: {
+        summary: `Free Estimate — ${lead_name}`,
+        description: `Project: ${project_type || 'Epoxy Flooring'}\nAddress: ${lead_address || 'TBD'}\nPhone: ${lead_phone}`,
+        start: { dateTime: appointmentDate.toISOString(), timeZone: 'America/Chicago' },
+        end: { dateTime: endDate.toISOString(), timeZone: 'America/Chicago' },
+      }
+    });
+
+    // Update lead in DB
+    db.prepare(`UPDATE leads SET booked_at = ?, call_status = 'booked' WHERE lead_phone = ?`)
+      .run(appointment_time, lead_phone);
+
+    const friendlyTime = appointmentDate.toLocaleString('en-US', {
+      weekday: 'long', month: 'long', day: 'numeric',
+      hour: 'numeric', minute: '2-digit', timeZone: 'America/Chicago'
+    });
+
+    console.log(`[Book Estimate] Booked for ${lead_name} at ${appointment_time}`);
+
+    return res.json({
+      response: `You're all set! Ling will come by ${lead_address} on ${friendlyTime} for your free estimate. See you then! 🙌`,
+      success: true
+    });
+  } catch(e) {
+    console.error('[Book Estimate] Error:', e.message);
+    return res.json({
+      response: `You're confirmed for ${appointment_time}. Ling will reach out to confirm the address. Looking forward to it!`,
+      success: true
+    });
+  }
 });
 
 // ─── ROUTE: MANUAL LEAD ENTRY ─────────────────────────────────────────────────
