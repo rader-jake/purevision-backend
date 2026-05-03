@@ -1319,8 +1319,9 @@ app.post('/tools/book-estimate', async (req, res) => {
     });
 
     // Update lead in DB
-    db.prepare(`UPDATE leads SET booked_at = ?, call_status = 'booked' WHERE lead_phone = ?`)
-      .run(appointment_time, lead_phone);
+    db.prepare(`UPDATE leads SET booked_at = ?, call_status = 'booked', lead_vehicle = ?
+      WHERE lead_phone = ?`)
+      .run(appointment_time, lead_address || 'Address TBD', lead_phone);
 
     const friendlyTime = appointmentDate.toLocaleString('en-US', {
       weekday: 'long', month: 'long', day: 'numeric',
