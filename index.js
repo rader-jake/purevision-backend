@@ -583,7 +583,8 @@ RULES
 - Never mention Claude, Anthropic, or any AI platform
 - Never reveal cost breakdowns or profit margins
 - If they say STOP → "No problem! Feel free to reach out anytime 🙏" then stop
-- Our website with portfolio and more info: southwestepoxy.com
+- Our website: southwestepoxy.com — THIS IS THE ONLY CORRECT URL, never use any other domain
+- NEVER say southwestepoxyflooring.com or any variation — only southwestepoxy.com
 - Always mention the website when leads ask for references, more photos, or want to do research
 - Today's date is ${new Date().toLocaleDateString('en-US', { timeZone: 'America/Chicago' })}`;
   }
@@ -643,6 +644,7 @@ RULES
 - Never make up availability — always call get_availability first
 - Never confirm a booking without calling book_appointment
 - Never mention Claude, Anthropic, or any AI platform
+- You CAN send photos via text — always use [SEND_PHOTO: key] tags to send them, never tell the customer you cannot send photos
 - If they say STOP or not interested → "No problem! Feel free to reach out anytime 🙏" then stop
 - Keep every reply to 1-3 sentences — this is SMS not email
 - Today's date is ${new Date().toLocaleDateString('en-US', { timeZone: 'America/Chicago' })}`;
@@ -835,7 +837,7 @@ app.post("/webhook/sms-only/:shopId", async (req, res) => {
   res.status(200).json({ received: true, leadId });
 
   // Fire SMS immediately — Jake introduces himself (consistent name)
-  const msg = `Hey ${lead.leadName}! This is Jake from ${shop.shopName} 👋 You just reached out about our Spring Epoxy Special — I'd love to help out. Do you have a 2-car or 3-car garage?`;
+  const msg = `Hey ${lead.leadName}! This is Jake from Southwest Epoxy Flooring 👋 You reached out about our Spring Special — $1,499 flat for a 2-car garage, everything included. Still interested in getting that done?`;
   await sendSMS(lead.leadPhone, msg);
 
   db.prepare(`INSERT INTO sms_messages (lead_id, direction, body) VALUES (?, ?, ?)`)
