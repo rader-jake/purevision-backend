@@ -159,8 +159,6 @@ app.get("/debug/calendar", async (req, res) => {
 });
 
 async function bookGoogleCalendarEvent(lead) {
-  // Parse as Central time explicitly by appending the offset
-  // "2026-04-12 11:00" becomes "2026-04-12T11:00:00-05:00"
   const dateTimeStr = lead.booked_at.includes("T") 
     ? lead.booked_at 
     : lead.booked_at.replace(" ", "T") + ":00-05:00";
@@ -170,7 +168,6 @@ async function bookGoogleCalendarEvent(lead) {
   if (isNaN(appointmentDate.getTime())) {
     throw new Error(`Could not parse appointment time: ${lead.booked_at}`);
   }
-  // Handle both lead.lead_name and lead.name formats
   const name    = lead.lead_name    || lead.name    || "Customer";
   const vehicle = lead.lead_vehicle || lead.vehicle || "Vehicle";
   const special = lead.lead_special || lead.special || "Tint Special";
@@ -193,8 +190,6 @@ async function bookGoogleCalendarEvent(lead) {
 }
 
 // ─── ROUTE: BOOK APPOINTMENT DIRECTLY ────────────────────────────────────────
-// Called by Retell when customer confirms appointment time
-// Replaces deposit-triggered booking while SMS/Square is disabled
 app.post("/tools/book-appointment", async (req, res) => {
   console.log("\n[Book Tool] Called with:", JSON.stringify(req.body, null, 2));
 
@@ -216,14 +211,12 @@ app.post("/tools/book-appointment", async (req, res) => {
   }
 
   try {
-    // Update lead in DB with appointment time
     db.prepare(`
       UPDATE leads
       SET booked_at = ?, call_status = 'booked'
       WHERE lead_phone = ?
     `).run(appointment_time, lead_phone);
 
-    // Build a fake lead object for calendar booking
     const lead = {
       lead_name:    lead_name    || "Customer",
       lead_phone:   lead_phone   || "",
@@ -232,7 +225,6 @@ app.post("/tools/book-appointment", async (req, res) => {
       booked_at:    appointment_time,
     };
 
-    // Book Google Calendar
     await bookGoogleCalendarEvent(lead);
 
     console.log(`[Book Tool] Appointment booked — ${lead_name} at ${appointment_time}`);
@@ -482,50 +474,117 @@ const smsTools = [
 // ─── SMS SYSTEM PROMPT ────────────────────────────────────────────────────────
 function buildSMSSystemPrompt(lead) {
   if (lead.shop_id === 'southwest-epoxy') {
-    return `You are Alex, Southwest Epoxy Flooring's AI assistant texting with a lead.
+    return `You are Jake, Southwest Epoxy Flooring's AI sales assistant texting with a lead.
 
 IDENTITY
 You are an AI texting on behalf of Southwest Epoxy Flooring Houston.
-Warm, professional, focused on booking a free quote.
+You are warm, knowledgeable, and focused on booking a free estimate or closing the Spring Special.
 This is SMS — keep every message SHORT (1-3 sentences max).
+Never be pushy — be genuinely helpful and let the work sell itself.
 
 LEAD INFO
 - Name: ${lead.lead_name}
-- Project: ${lead.lead_vehicle || 'epoxy flooring project'}
+- Project: ${lead.lead_vehicle || 'garage epoxy'}
 - Phone: ${lead.lead_phone}
 
-SERVICES & PRICING
-- Garage floor epoxy: starting at $3-5 per sq ft
-- Basement floors: starting at $3-5 per sq ft
-- Commercial spaces: custom quote
-- Free estimates on all projects
-- Professional prep and installation included
-- Multiple color and flake options available
+THE SPRING SPECIAL (PRIMARY OFFER)
+- 2-car garage: $1,499 flat — this is our most popular package
+- 3-car garage: $1,800 flat
+- Includes: pigmented base coat, decorative flakes (customer picks color), clear topcoat
+- Professional prep and installation by Ling and his crew
+- Flake colors available — customer can choose their style
+- This is a limited spring promotion — creates natural urgency
+
+WHAT'S INCLUDED IN THE INSTALL (know this cold)
+The system has 4 layers:
+1. Concrete base (their existing floor)
+2. Pigmented basecoat — bonds to concrete
+3. Decorative flakes — customer picks color and style
+4. Clear topcoat — seals everything, makes it durable and glossy
+
+CONCRETE PREP — IMPORTANT KNOWLEDGE
+- New/clean concrete with no stains: no grinding needed, ready to coat
+- Older concrete with oil, paint, or stains: needs diamond grinding first
+- Grinding uses industrial diamond blades to remove contaminants so basecoat adheres properly
+- Residential garages rarely need heavy grinding unless heavily soiled
+- If grinding is needed: add approximately $1 per sq ft to the quote
+- Always honest — "We'll assess the floor when we come out for the free estimate"
+
+WHAT WE DO AND DON'T DO
+- We DO: garage floors, basement floors, cement floors, commercial floors, diamond grinding, flake systems
+- We DON'T do: concrete hardening or other specialty concrete work — we specialize in epoxy coating systems
+- When asked about process: "Yes we do diamond grinding and use industrial-grade materials — same process the other guys use, just better pricing and quality"
+
+PHOTO STRATEGY — THIS IS KEY
+When a lead first engages or asks about the work, send them a photo of a completed garage.
+When they ask about colors or flakes, send them the color chart photo.
+When they pick a color, send them a photo of a completed garage to show the quality and finish.
+Note: the photo may not be the exact color they chose — that's fine, it shows the quality of work
+and what the final result looks and feels like. Never claim the photo matches their color exactly.
+When they ask for references or proof of work, send multiple completed job photos:
+[SEND_PHOTO: completed_garage]
+[SEND_PHOTO: completed_garage_2]
+[SEND_PHOTO: completed_garage_3]
+Photos close deals — use them proactively.
+
+To send a photo use this exact format on a new line:
+[SEND_PHOTO: completed_garage]
+[SEND_PHOTO: color_chart]
+[SEND_PHOTO: recent_job]
+
+PRICING KNOWLEDGE
+2-car garage Spring Special: $1,499 flat
+3-car garage: $1,800 flat
+If grinding needed: add ~$1/sq ft
+Commercial: custom quote after estimate
+Never volunteer the cost breakdown — just quote the flat rate confidently
 
 CONVERSATION FLOW
-1. Confirm they are still interested in a free epoxy estimate
-2. Ask what type of space — garage, basement, or commercial?
-3. Ask rough square footage — "Roughly how big is the space?"
-4. Ask for their address — "What's the address so Ling can come take a look?"
-5. Ask what day works for the estimate
-6. Call get_epoxy_availability with that date in YYYY-MM-DD format
-7. Offer only slots the tool returns — never invent times
-8. Confirm: "Perfect — I have Ling coming to [address] on [DAY] at [TIME] for a free estimate. Any questions?"
-9. Only after they confirm, call book_estimate with all details
-10. Close warmly
+1. Open warm — reference the Spring Special they inquired about
+2. Send a completed garage photo immediately to show quality
+[SEND_PHOTO: completed_garage]
+3. Ask: "Do you have a 2-car or 3-car garage?"
+4. Quote the flat rate for their garage size confidently
+5. Ask about the floor condition — any oil, paint, or stains?
+6. If they ask about colors, send the color chart
+[SEND_PHOTO: color_chart]
+7. If they pick a color, send a completed job photo to show quality of finish
+[SEND_PHOTO: recent_job]
+8. Get their address for the free estimate
+9. Call get_epoxy_availability for their preferred day
+10. Book the estimate with book_estimate
+11. If they're not ready — acknowledge it warmly and note to follow up
 
 OBJECTION HANDLING
-"How much does it cost?" → "It depends on the space size — most garages run between $1500 and $3000. We offer free estimates so you get an exact number with no obligation!"
-"How long does it take?" → "Most garage floors are done in 1-2 days. We handle everything from prep to finish."
-"What's the process?" → "We prep the floor, apply the epoxy coating, add your choice of flakes or color, then seal it. Looks amazing and lasts for years!"
-"Is this a real person?" → "I'm Alex, Southwest Epoxy's AI assistant! I handle scheduling so the crew can focus on installs. How can I help?"
+"How much does it cost?" → "We're running our Spring Special right now — $1,499 flat for a 2-car garage, $1,800 for a 3-car. That includes everything — base coat, flakes, and topcoat. Want to see some of our recent work?"
+"Do you do diamond grinding?" → "Yes, we use diamond grinding and industrial-grade materials — same process as the other guys. Want me to send you some photos of our recent jobs and customer feedback?"
+"Do you do hardening or other concrete work?" → "We specialize in epoxy coating systems for garage and cement floors — that's our craft and we do it really well. Happy to show you our work!"
+"What if my floor has oil stains?" → "Great question — if there's oil or stains we'll do a prep grind to make sure the base coat adheres perfectly. We assess that when we come out for the free estimate, no surprises."
+"I just bought the house / not ready yet" → "Totally understand! No rush at all — the Spring Special runs through the season so whenever you're ready just reach back out and we'll take care of you 🙏"
+"Can I see your work / references?" → "Absolutely! Here's our website with more of our work: southwestepoxy.com — and here are some photos from recent jobs we did in Houston!" then send completed_garage photos
+"I want flakes" → "Great choice — flakes look amazing and are super durable. Here's our color chart, pick what catches your eye!" then send color chart photo
+"How long does it take?" → "Most 2-car garages are done in 1 day. We handle everything — you just come home to a brand new floor."
+"Is this a real person?" → "I'm Jake, Southwest Epoxy's AI assistant! I handle the initial scheduling so Ling and the crew can focus on doing great work. How can I help?"
+"I need to think about it" → "Of course! Just keep in mind the Spring Special pricing is limited. Want me to at least pencil in a free estimate — zero obligation, Ling just comes out and takes a look?"
+"I want to see more" → "Check out southwestepoxy.com for our full portfolio! Here are a few of our recent Houston garages 👇" then send photos
+
+FOLLOW-UP STRATEGY
+If a lead says they're not ready or need to think:
+- Acknowledge warmly, never pressure
+- Note their timeline if they mention one
+- End with an open door: "Just reach back out whenever you're ready — we'd love to take care of you 🙏"
 
 RULES
 - Always use the customer's first name
-- Keep replies to 1-3 sentences — this is SMS
-- Goal is to book a free estimate appointment
+- Keep replies to 1-3 sentences — this is SMS not email
+- Send photos proactively — they close deals
+- Never make up availability — always call get_epoxy_availability first
+- Never confirm a booking without calling book_estimate
 - Never mention Claude, Anthropic, or any AI platform
-- If they say STOP → "No problem! Feel free to reach out anytime 🙏"
+- Never reveal cost breakdowns or profit margins
+- If they say STOP → "No problem! Feel free to reach out anytime 🙏" then stop
+- Our website with portfolio and more info: southwestepoxy.com
+- Always mention the website when leads ask for references, more photos, or want to do research
 - Today's date is ${new Date().toLocaleDateString('en-US', { timeZone: 'America/Chicago' })}`;
   }
 
@@ -588,41 +647,41 @@ RULES
 - Keep every reply to 1-3 sentences — this is SMS not email
 - Today's date is ${new Date().toLocaleDateString('en-US', { timeZone: 'America/Chicago' })}`;
 }
-// SMS TOOL
 
+// ─── SMS TOOL ─────────────────────────────────────────────────────────────────
 function getSMSTools(lead) {
-      if (lead.shop_id === 'southwest-epoxy') {
-        return [
-          {
-            name: "get_epoxy_availability",
-            description: "Check available estimate slots for a given date",
-            input_schema: {
-              type: "object",
-              properties: {
-                date: { type: "string", description: "Date in YYYY-MM-DD format" }
-              },
-              required: ["date"]
-            }
+  if (lead.shop_id === 'southwest-epoxy') {
+    return [
+      {
+        name: "get_epoxy_availability",
+        description: "Check available estimate slots for a given date",
+        input_schema: {
+          type: "object",
+          properties: {
+            date: { type: "string", description: "Date in YYYY-MM-DD format" }
           },
-          {
-            name: "book_estimate",
-            description: "Book a free in-home estimate for the lead",
-            input_schema: {
-              type: "object",
-              properties: {
-                lead_name: { type: "string" },
-                lead_phone: { type: "string" },
-                lead_address: { type: "string", description: "Full address where estimate will take place" },
-                project_type: { type: "string" },
-                appointment_time: { type: "string", description: "Format: YYYY-MM-DD HH:mm" }
-              },
-              required: ["lead_name", "lead_phone", "lead_address", "appointment_time"]
-            }
-          }
-        ];
+          required: ["date"]
+        }
+      },
+      {
+        name: "book_estimate",
+        description: "Book a free in-home estimate for the lead",
+        input_schema: {
+          type: "object",
+          properties: {
+            lead_name: { type: "string" },
+            lead_phone: { type: "string" },
+            lead_address: { type: "string", description: "Full address where estimate will take place" },
+            project_type: { type: "string" },
+            appointment_time: { type: "string", description: "Format: YYYY-MM-DD HH:mm" }
+          },
+          required: ["lead_name", "lead_phone", "lead_address", "appointment_time"]
+        }
       }
-      return smsTools;
-    }
+    ];
+  }
+  return smsTools;
+}
 
 // ─── SMS AGENT LOOP ───────────────────────────────────────────────────────────
 async function runSMSAgent(messages, lead) {
@@ -657,7 +716,6 @@ async function runSMSAgent(messages, lead) {
 
       console.log(`[SMS Agent] Tool call: ${toolName}`, toolInput);
 
-      // Map tool name to endpoint
       const endpointMap = {
         'get_availability': 'get-availability',
         'book_appointment': 'book-appointment',
@@ -707,7 +765,6 @@ async function runSMSAgent(messages, lead) {
 // ─── SEND SMS HELPER ──────────────────────────────────────────────────────────
 async function sendSMS(to, message) {
   try {
-    // Blooio requires phone number URL-encoded in the path
     const encodedTo = encodeURIComponent(to);
     const resp = await fetch(`https://backend.blooio.com/v2/api/chats/${encodedTo}/messages`, {
       method: 'POST',
@@ -728,8 +785,39 @@ async function sendSMS(to, message) {
   }
 }
 
-// SMS-ONLY WEBHOOK FOR SOUTHWEST EPOXY (NO CALLS) ─────────────────────────────────
+async function sendSMSWithPhoto(to, text, imageUrl) {
+  try {
+    const encodedTo = encodeURIComponent(to);
+    const resp = await fetch(`https://backend.blooio.com/v2/api/chats/${encodedTo}/messages`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${process.env.BLOOIO_API_KEY}`
+      },
+      body: JSON.stringify({
+        text: text || '',
+        fromNumber: process.env.BLOOIO_NUMBER,
+        attachments: [imageUrl]
+      })
+    });
+    const data = await resp.json();
+    console.log('[SMS Photo] Sent:', JSON.stringify(data));
+    return data;
+  } catch(e) {
+    console.error('[SMS Photo] Failed:', e.message);
+  }
+}
 
+// ─── PHOTO MAP ────────────────────────────────────────────────────────────────
+const photoMap = {
+  'completed_garage':   'https://shopdesk.ai/epoxy/completed-garage-1.jpg',
+  'completed_garage_2': 'https://shopdesk.ai/epoxy/completed-garage-2.jpg',
+  'completed_garage_3': 'https://shopdesk.ai/epoxy/completed-garage-3.jpg',
+  'color_chart':        'https://shopdesk.ai/epoxy/color-chart.jpg',
+  'recent_job':         'https://shopdesk.ai/epoxy/completed-garage-1.jpg',
+};
+
+// SMS-ONLY WEBHOOK FOR SOUTHWEST EPOXY (NO CALLS) ─────────────────────────────
 app.post("/webhook/sms-only/:shopId", async (req, res) => {
   const { shopId } = req.params;
   const shop = SHOP_CONFIGS[shopId];
@@ -746,67 +834,60 @@ app.post("/webhook/sms-only/:shopId", async (req, res) => {
   const leadId = result.lastInsertRowid;
   res.status(200).json({ received: true, leadId });
 
-  // Fire SMS immediately instead of calling
-  const msg = `Hey ${lead.leadName}! This is Alex from ${shop.shopName} 👋 You just reached out about an epoxy project — I'd love to help out. What were you looking for?`;
+  // Fire SMS immediately — Jake introduces himself (consistent name)
+  const msg = `Hey ${lead.leadName}! This is Jake from ${shop.shopName} 👋 You just reached out about our Spring Epoxy Special — I'd love to help out. Do you have a 2-car or 3-car garage?`;
   await sendSMS(lead.leadPhone, msg);
-  
+
   db.prepare(`INSERT INTO sms_messages (lead_id, direction, body) VALUES (?, ?, ?)`)
     .run(leadId, 'outbound', msg);
-  
+
   console.log(`[${shopId}] SMS sent to ${lead.leadName}`);
 });
-
 
 // ─── INBOUND SMS WEBHOOK ──────────────────────────────────────────────────────
 app.post('/webhook/sms/inbound',
   express.raw({ type: 'application/json' }),
   async (req, res) => {
-    // const signature = req.headers['x-blooio-signature'] ?? '';
-    // const event = req.headers['x-blooio-event'] ?? '';
-
     const rawBody = Buffer.isBuffer(req.body) ? req.body : Buffer.from(JSON.stringify(req.body));
 
     const signature = req.headers['x-blooio-signature'] ?? '';
     const payload_preview = JSON.parse(rawBody.toString('utf8'));
     const event = req.headers['x-blooio-event'] || payload_preview.event || '';
 
-    // Only verify signature if one was provided (skip for testing)
-   if (signature) {
-    try {
-      // Parse t=timestamp,v1=hash format
-      const parts = {};
-      signature.split(',').forEach(part => {
-        const [key, value] = part.split('=');
-        parts[key] = value;
-      });
+    if (signature) {
+      try {
+        const parts = {};
+        signature.split(',').forEach(part => {
+          const [key, value] = part.split('=');
+          parts[key] = value;
+        });
 
-      const timestamp = parts['t'];
-      const v1 = parts['v1'];
+        const timestamp = parts['t'];
+        const v1 = parts['v1'];
 
-      if (!timestamp || !v1) {
-        console.log('[SMS] Invalid signature format');
+        if (!timestamp || !v1) {
+          console.log('[SMS] Invalid signature format');
+          return res.sendStatus(401);
+        }
+
+        const signedPayload = `${timestamp}.${rawBody.toString('utf8')}`;
+        const expected = crypto
+          .createHmac('sha256', process.env.BLOOIO_SECRET)
+          .update(signedPayload)
+          .digest('hex');
+
+        console.log('[SMS] v1 received:', v1);
+        console.log('[SMS] expected:', expected);
+
+        if (expected !== v1) {
+          console.log('[SMS] Invalid Blooio signature — rejected');
+          return res.sendStatus(401);
+        }
+      } catch(e) {
+        console.log('[SMS] Signature check failed:', e.message);
         return res.sendStatus(401);
       }
-
-      // Blooio signs timestamp + . + raw body
-      const signedPayload = `${timestamp}.${rawBody.toString('utf8')}`;
-      const expected = crypto
-        .createHmac('sha256', process.env.BLOOIO_SECRET)
-        .update(signedPayload)
-        .digest('hex');
-
-      console.log('[SMS] v1 received:', v1);
-      console.log('[SMS] expected:', expected);
-
-      if (expected !== v1) {
-        console.log('[SMS] Invalid Blooio signature — rejected');
-        return res.sendStatus(401);
-      }
-    } catch(e) {
-      console.log('[SMS] Signature check failed:', e.message);
-      return res.sendStatus(401);
     }
-  }
 
     res.sendStatus(200);
 
@@ -817,8 +898,8 @@ app.post('/webhook/sms/inbound',
 
     try {
       const payload = JSON.parse(rawBody.toString('utf8'));
-      const from = payload.data?.from || payload.external_id;
-      const content = payload.data?.text || payload.text;
+      const from = payload.from_number || payload.data?.from || payload.external_id;
+      const content = payload.content || payload.data?.text || payload.text;
 
       if (!from || !content) return;
 
@@ -850,14 +931,25 @@ app.post('/webhook/sms/inbound',
       const reply = await runSMSAgent(messages, lead);
       if (!reply) return;
 
-      await sendSMS(from, reply);
+      // Extract and send photos first
+      const photoMatches = reply.match(/\[SEND_PHOTO: (\w+)\]/g) || [];
+      for (const match of photoMatches) {
+        const key = match.match(/\[SEND_PHOTO: (\w+)\]/)[1];
+        if (photoMap[key]) {
+          await sendSMSWithPhoto(from, '', photoMap[key]);
+        }
+      }
+
+      // Send clean text reply (photos stripped out)
+      const cleanReply = reply.replace(/\[SEND_PHOTO: \w+\]/g, '').trim();
+      if (cleanReply) await sendSMS(from, cleanReply);
 
       db.prepare(`INSERT INTO sms_messages (lead_id, direction, body) VALUES (?, ?, ?)`)
         .run(lead.id, 'inbound', content);
       db.prepare(`INSERT INTO sms_messages (lead_id, direction, body) VALUES (?, ?, ?)`)
-        .run(lead.id, 'outbound', reply);
+        .run(lead.id, 'outbound', cleanReply);
 
-      console.log(`[SMS] Replied to ${lead.lead_name}: "${reply}"`);
+      console.log(`[SMS] Replied to ${lead.lead_name}: "${cleanReply}"`);
 
     } catch(e) {
       console.error('[SMS Inbound] Error:', e.message);
@@ -904,7 +996,6 @@ app.post("/webhook/retell/call-ended", async (req, res) => {
       .run(attempts, newStatus, lead.id);
 
     if (attempts === 1) {
-      // First no answer — double dial after 2 minutes
       console.log(`[Retry] Double dial for ${lead.lead_name} in 2 min`);
       setTimeout(async () => {
         try {
@@ -924,7 +1015,6 @@ app.post("/webhook/retell/call-ended", async (req, res) => {
       }, 2 * 60 * 1000);
 
     } else if (attempts >= 2) {
-      // Two failed calls — send SMS fallback
       console.log(`[SMS Fallback] Sending to ${lead.lead_name} after ${attempts} failed calls`);
       const msg = `Hey ${lead.lead_name}! This is Marissa from Pure Vision Tints 🚗 We tried reaching you about tinting your ${lead.lead_vehicle} but couldn't connect. Still interested? Just reply here and I'll get you taken care of real quick 👍`;
       await sendSMS(lead.lead_phone, msg);
@@ -935,7 +1025,6 @@ app.post("/webhook/retell/call-ended", async (req, res) => {
     }
 
   } else {
-    // Completed or other status — just update normally
     db.prepare(`UPDATE leads SET call_status = ? WHERE id = ?`)
       .run(newStatus, lead.id);
   }
@@ -1010,11 +1099,9 @@ app.post("/tools/get-availability", async (req, res) => {
 });
 
 // ─── ROUTE: SEND DEPOSIT LINK — DISABLED UNTIL TWILIO A2P APPROVED ───────────
-// Uncomment this entire block when Twilio SMS is approved
 // app.post("/tools/send-deposit", async (req, res) => { ... });
 
 // ─── ROUTE: SQUARE PAYMENT WEBHOOK — DISABLED UNTIL DEPOSIT LINK RE-ENABLED ──
-// Uncomment this entire block when deposit flow is re-enabled
 // app.post("/webhooks/square", async (req, res) => { ... });
 
 // ─── ROUTE: CHECK DEPOSIT STATUS — DISABLED UNTIL DEPOSIT LINK RE-ENABLED ────
@@ -1079,7 +1166,6 @@ app.get('/dashboard/call/:callId', async (req, res) => {
 });
 
 // ─── ROUTE: SHOPDESK DEMO CALL ────────────────────────────────────────────────
-// Powers the "Call me now" button on shopdesk.ai
 app.post("/demo/call", async (req, res) => {
   console.log("[ShopDesk Demo] Route hit — body:", JSON.stringify(req.body));
   console.log("ShopDesk Demo")
@@ -1128,13 +1214,10 @@ app.get('/dashboard/data/:shopId', async (req, res) => {
   if (password !== 'purevision2026') return res.status(401).json({ error: 'Unauthorized' });
 
   try {
-    const rawKey = process.env.GOOGLE_PRIVATE_KEY;
-    // Leads from SQLite
     const leads = db.prepare(
       'SELECT * FROM leads WHERE shop_id = ? ORDER BY created_at DESC'
     ).all(req.params.shopId);
 
-    // Fetch full call details from Retell using call_id on each lead
     const calls = [];
     const leadsWithCalls = leads.filter(l => l.call_id);
     for (const lead of leadsWithCalls) {
@@ -1144,7 +1227,6 @@ app.get('/dashboard/data/:shopId', async (req, res) => {
         });
         if (r.ok) {
           const callData = await r.json();
-          // Merge lead info into the call object so dashboard has name/vehicle
           calls.push({
             ...callData,
             lead_name: lead.lead_name,
@@ -1159,16 +1241,15 @@ app.get('/dashboard/data/:shopId', async (req, res) => {
       }
     }
 
-    // Calendar events (next 14 days)
     let events = [];
     try {
       const auth = new google.auth.JWT({
-      email: process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL,
-      key: process.env.GOOGLE_PRIVATE_KEY.replace(/\\n/g, "\n"),
-      scopes: ["https://www.googleapis.com/auth/calendar.readonly"],
-    });
+        email: process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL,
+        key: process.env.GOOGLE_PRIVATE_KEY.replace(/\\n/g, "\n"),
+        scopes: ["https://www.googleapis.com/auth/calendar.readonly"],
+      });
 
-    await auth.authorize();
+      await auth.authorize();
 
       const calendar = google.calendar({ version: 'v3', auth });
       const now = new Date();
@@ -1197,7 +1278,7 @@ app.get('/dashboard/data/:shopId', async (req, res) => {
   }
 });
 
-// LING DASHBOARD
+// ─── LING DASHBOARD ───────────────────────────────────────────────────────────
 app.get('/api/conversations/:shopId', async (req, res) => {
   const { password } = req.query;
   if (password !== 'southwestepoxy') return res.status(401).json({ error: 'Unauthorized' });
@@ -1217,7 +1298,7 @@ app.get('/api/conversations/:shopId', async (req, res) => {
   res.json(messages);
 });
 
-// Ling calendar events
+// ─── ROUTE: GET EPOXY AVAILABILITY ───────────────────────────────────────────
 app.post('/tools/get-epoxy-availability', async (req, res) => {
   const raw = req.body;
   const args = raw.args || raw;
@@ -1285,7 +1366,7 @@ app.post('/tools/get-epoxy-availability', async (req, res) => {
   }
 });
 
-// BOOK APPOINTMENT ROUTE FOR EPOXY ESTIMATES
+// ─── ROUTE: BOOK EPOXY ESTIMATE ───────────────────────────────────────────────
 app.post('/tools/book-estimate', async (req, res) => {
   const raw = req.body;
   const args = raw.args || raw;
@@ -1306,7 +1387,7 @@ app.post('/tools/book-estimate', async (req, res) => {
       : appointment_time.replace(' ', 'T') + ':00-05:00';
 
     const appointmentDate = new Date(dateTimeStr);
-    const endDate = new Date(appointmentDate.getTime() + 60 * 60 * 1000); // 1 hour estimate
+    const endDate = new Date(appointmentDate.getTime() + 60 * 60 * 1000);
 
     await gcal.events.insert({
       calendarId: process.env.EPOXY_CALENDAR_ID,
@@ -1318,7 +1399,6 @@ app.post('/tools/book-estimate', async (req, res) => {
       }
     });
 
-    // Update lead in DB
     db.prepare(`UPDATE leads SET booked_at = ?, call_status = 'booked', lead_vehicle = ?
       WHERE lead_phone = ?`)
       .run(appointment_time, lead_address || 'Address TBD', lead_phone);
@@ -1343,8 +1423,7 @@ app.post('/tools/book-estimate', async (req, res) => {
   }
 });
 
-// DELETE TEST LEADS
-
+// ─── ROUTE: DELETE TEST LEADS ─────────────────────────────────────────────────
 app.post('/admin/delete-test-leads', (req, res) => {
   const { secret, phone } = req.body;
   if (secret !== process.env.MANUAL_ENTRY_SECRET) {
@@ -1352,7 +1431,6 @@ app.post('/admin/delete-test-leads', (req, res) => {
   }
 
   if (phone) {
-    // Delete specific phone number
     const lead = db.prepare(`SELECT id FROM leads WHERE lead_phone = ?`).get(phone);
     if (lead) {
       db.prepare(`DELETE FROM sms_messages WHERE lead_id = ?`).run(lead.id);
