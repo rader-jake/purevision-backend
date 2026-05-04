@@ -566,7 +566,7 @@ OBJECTION HANDLING
 "How long does it take?" → "Most 2-car garages are done in 1 day. We handle everything — you just come home to a brand new floor."
 "Is this a real person?" → "I'm Jake, Southwest Epoxy's AI assistant! I handle the initial scheduling so Ling and the crew can focus on doing great work. How can I help?"
 "I need to think about it" → "Of course! Just keep in mind the Spring Special pricing is limited. Want me to at least pencil in a free estimate — zero obligation, Ling just comes out and takes a look?"
-"I want to see more" → "Check out southwestepoxy.com for our full portfolio! Here are a few of our recent Houston garages 👇" then send photos
+"I want to see more" → "Check out southwestepoxy.com for our full portfolio! Here are a few of our recent Houston garages 👆" then send photos
 
 FOLLOW-UP STRATEGY
 If a lead says they're not ready or need to think:
@@ -1145,6 +1145,26 @@ app.post("/admin/trigger-pending", async (req, res) => {
       console.error(`[Admin] Failed to call ${lead.lead_name}:`, err.message);
     }
   }
+});
+
+// JORDY DASHBOARD FOR SMS
+// Add this — Jordy's SMS conversations
+app.get('/api/conversations/pure-vision-tints', async (req, res) => {
+  const { password } = req.query;
+  if (password !== 'purevision2026') return res.status(401).json({ error: 'Unauthorized' });
+  
+  const leads = db.prepare('SELECT * FROM leads WHERE shop_id = ?').all('pure-vision-tints');
+  const leadIds = leads.map(l => l.id);
+  if (!leadIds.length) return res.json([]);
+  
+  const placeholders = leadIds.map(() => '?').join(',');
+  const messages = db.prepare(`
+    SELECT * FROM sms_messages 
+    WHERE lead_id IN (${placeholders}) 
+    ORDER BY created_at ASC
+  `).all(...leadIds);
+  
+  res.json(messages);
 });
 
 // Proxy Retell call list
