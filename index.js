@@ -333,7 +333,32 @@ app.post("/webhook/ghl/:shopId", async (req, res) => {
 
   res.status(200).json({ received: true, leadId });
 
-  if (process.env.CALLS_ENABLED === "true") {
+  // Calls disabled for now — focusing on SMS
+
+  // if (process.env.CALLS_ENABLED === "true") {
+  //   try {
+  //     const callResult = await triggerRetellCall(lead, shop);
+  //     console.log(`[${shopId}] Retell call triggered:`, callResult.call_id);
+  //     db.prepare(`UPDATE leads SET call_id = ?, call_status = 'calling' WHERE id = ?`)
+  //       .run(callResult.call_id, leadId);
+  //   } catch (err) {
+  //     console.error(`[${shopId}] Failed to trigger Retell call:`, err.message);
+  //     db.prepare(`UPDATE leads SET call_status = 'call_failed' WHERE id = ?`)
+  //       .run(leadId);
+  //   }
+  // } else {
+  //   console.log(`[${shopId}] Calls disabled — lead stored, no call triggered`);
+  // }
+
+  if (shop.smsOnly) {
+    const msg = `Hey ${lead.leadName}! This is Marissa with Pure Vision Tints. You reached out about tinting your ${lead.leadVehicle} — were you still interested in getting that done?`;
+    await sendSMS(lead.leadPhone, msg);
+    db.prepare(`INSERT INTO sms_messages (lead_id, direction, body) VALUES (?, ?, ?)`)
+      .run(leadId, 'outbound', msg);
+    db.prepare(`UPDATE leads SET call_status = 'sms_fallback' WHERE id = ?`)
+      .run(leadId);
+    console.log(`[${shopId}] SMS sent to ${lead.leadName} (SMS-only mode)`);
+  } else if (process.env.CALLS_ENABLED === "true") {
     try {
       const callResult = await triggerRetellCall(lead, shop);
       console.log(`[${shopId}] Retell call triggered:`, callResult.call_id);
@@ -345,8 +370,10 @@ app.post("/webhook/ghl/:shopId", async (req, res) => {
         .run(leadId);
     }
   } else {
-    console.log(`[${shopId}] Calls disabled — lead stored, no call triggered`);
+    console.log(`[${shopId}] Calls disabled — lead stored, no action`);
   }
+
+
 });
 
 // ─── ROUTE: META WEBHOOK VERIFICATION ────────────────────────────────────────
@@ -1467,68 +1494,6 @@ app.post('/admin/delete-test-leads', (req, res) => {
   return res.status(400).json({ error: 'Phone number required' });
 });
 
-// ─── ROUTE: MANUAL LEAD ENTRY ─────────────────────────────────────────────────
-app.post("/leads/manual", async (req, res) => {
-  const { name, phone, vehicle, special, secret } = req.body;
-  if (secret !== process.env.MANUAL_ENTRY_SECRET) {
-    return res.status(403).json({ error: "Unauthorized" });
-  }
-  if (!phone) {
-    return res.status(400).json({ error: "Phone required" });
-  }
-  const result = db.prepare(`
-    INSERT INTO leads (shop_id, lead_name, lead_phone, lead_vehicle, lead_special)
-    VALUES (?, ?, ?, ?, ?)
-  `).run("pure-vision-tints", name || "there", phone, vehicle || "your vehicle", special || "Ceramic Special");
-  const leadId = result.lastInsertRowid;
-  console.log(`[Manual] Lead stored — id: ${leadId}, name: ${name}, phone: ${phone}`);
-
-  // DISABLED CALLS FOR AND INTEGRATED SMS 
-
-  // if (process.env.CALLS_ENABLED === "true") {
-  //   const shop = SHOP_CONFIGS["pure-vision-tints"];
-  //   try {
-  //     const callResult = await triggerRetellCall({
-  //       leadName:    name || "there",
-  //       leadPhone:   phone,
-  //       leadVehicle: vehicle || "your vehicle",
-  //       leadSpecial: special || "Ceramic Special",
-  //     }, shop);
-  //     db.prepare(`UPDATE leads SET call_id = ?, call_status = 'calling' WHERE id = ?`)
-  //       .run(callResult.call_id, leadId);
-  //     console.log(`[Manual] Call triggered for ${name}`);
-  //   } catch (err) {
-  //     console.error(`[Manual] Call failed:`, err.message);
-  //   }
-  // }
-
-      if (shop.smsOnly) {
-        // SMS immediately — no call
-        const msg = `Hey ${lead.leadName}! This is Marissa from Pure Vision Tints You reached out about tinting your ${lead.leadVehicle} — were you still looking to get that done?`;
-        await sendSMS(lead.leadPhone, msg);
-        db.prepare(`INSERT INTO sms_messages (lead_id, direction, body) VALUES (?, ?, ?)`)
-          .run(leadId, 'outbound', msg);
-        db.prepare(`UPDATE leads SET call_status = 'sms_fallback' WHERE id = ?`)
-          .run(leadId);
-        console.log(`[${shopId}] SMS sent to ${lead.leadName} (SMS-only mode)`);
-      } else if (process.env.CALLS_ENABLED === "true") {
-        try {
-          const callResult = await triggerRetellCall(lead, shop);
-          console.log(`[${shopId}] Retell call triggered:`, callResult.call_id);
-          db.prepare(`UPDATE leads SET call_id = ?, call_status = 'calling' WHERE id = ?`)
-            .run(callResult.call_id, leadId);
-        } catch (err) {
-          console.error(`[${shopId}] Failed to trigger Retell call:`, err.message);
-          db.prepare(`UPDATE leads SET call_status = 'call_failed' WHERE id = ?`)
-            .run(leadId);
-        }
-      } else {
-        console.log(`[${shopId}] Calls disabled — lead stored, no action`);
-      }
-
-
-  res.status(200).json({ success: true, leadId });
-});
 
 // ─── ROUTE: DASHBOARD API ─────────────────────────────────────────────────────
 app.get("/api/leads/:shopId", (req, res) => {
