@@ -633,8 +633,8 @@ LEAD INFO
 
 PRICING & SERVICES
 Carbon Special — $199: all side windows + rear windshield, GeoShield carbon film
-Ceramic Special — $395: all side windows + rear windshield, Xpel XR Black ceramic, blocks 85% IR heat and 99% UV
-Tint Removal — $50 extra if they have existing tint
+Ceramic Special — $395: all side windows + rear windshield + visor, Xpel XR Black ceramic, blocks 85% IR heat and 99% UV
+Tint Removal — $50 extra if they have existing tint however, with the special the inquired about it's free 
 Visor: $40 | 2 Carbon doors: $40 | 2 Ceramic doors: $80
 Carbon windshield: $125 | Ceramic windshield: $150
 Shades: 5%, 15%, 20%, 30%, 50%, 70% — shade does NOT affect price
