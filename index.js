@@ -41,6 +41,21 @@ db.exec(`
   )
 `);
 
+db.exec(`
+  CREATE TABLE IF NOT EXISTS outreach_leads (
+    id TEXT PRIMARY KEY,
+    name TEXT,
+    biz TEXT,
+    phone TEXT,
+    vertical TEXT,
+    city TEXT,
+    notes TEXT,
+    status TEXT DEFAULT 'new',
+    touch INTEGER DEFAULT 1,
+    added TEXT
+  )
+`);
+
 
 try {
   db.exec(`ALTER TABLE leads ADD COLUMN call_attempts INTEGER DEFAULT 0`);
@@ -124,6 +139,14 @@ app.use(cors({
   origin: ["https://shopdesk.ai", "https://www.shopdesk.ai", "http://localhost:3000"],
   methods: ["GET", "POST"],
 }));
+
+// At the top of index.js with your other middleware
+app.use((req, res, next) => {
+  res.header('Access-Control-Allow-Origin', '*');
+  res.header('Access-Control-Allow-Methods', 'GET,POST,PATCH,DELETE');
+  res.header('Access-Control-Allow-Headers', 'Content-Type');
+  next();
+});
 
 // ─── ROUTE: HEALTH CHECK ──────────────────────────────────────────────────────
 app.get("/health", (_, res) => res.json({ status: "ok" }));
@@ -1502,6 +1525,59 @@ app.get("/api/leads/:shopId", (req, res) => {
     SELECT * FROM leads WHERE shop_id = ? ORDER BY created_at DESC
   `).all(shopId);
   res.json(leads);
+});
+
+// GET /leads — fetch all
+app.get('/leads', (req, res) => {
+  try {
+    const leads = db.prepare(
+      'SELECT * FROM outreach_leads ORDER BY added DESC'
+    ).all();
+    res.json(leads);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /leads — add new lead
+app.post('/leads', (req, res) => {
+  try {
+    const { id, name, biz, phone, vertical, city, notes, status, touch, added } = req.body;
+    db.prepare(`
+      INSERT INTO outreach_leads (id, name, biz, phone, vertical, city, notes, status, touch, added)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(id, name, biz, phone, vertical, city, notes, status || 'new', touch || 1, added);
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// PATCH /leads/:id — update status, touch, notes
+app.patch('/leads/:id', (req, res) => {
+  try {
+    const { status, touch, notes } = req.body;
+    db.prepare(`
+      UPDATE outreach_leads
+      SET status = COALESCE(?, status),
+          touch  = COALESCE(?, touch),
+          notes  = COALESCE(?, notes)
+      WHERE id = ?
+    `).run(status ?? null, touch ?? null, notes ?? null, req.params.id);
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// DELETE /leads/:id — remove lead
+app.delete('/leads/:id', (req, res) => {
+  try {
+    db.prepare('DELETE FROM outreach_leads WHERE id = ?').run(req.params.id);
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // ─── START SERVER ─────────────────────────────────────────────────────────────
