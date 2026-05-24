@@ -148,7 +148,7 @@ app.use('/webhook/sms/inbound', express.raw({ type: 'application/json' }));
 app.use(express.json());
 
 app.use(cors({
-  origin: ["https://shopdesk.ai", "https://www.shopdesk.ai", "http://localhost:3000"],
+  origin: ["https://shopdesk.ai", "https://www.shopdesk.ai", "http://localhost:3000", "null"],
   methods: ["GET", "POST"],
 }));
 
