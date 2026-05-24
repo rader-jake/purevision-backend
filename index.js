@@ -77,14 +77,15 @@ const SHOP_CONFIGS = {
     },
   },
   "southwest-epoxy": {
-  shopId:     "southwest-epoxy",
-  shopName:   "Southwest Epoxy",
-  retellAgentId: null, // SMS only for now
-  fieldMapping: {
-    leadName:    "first_name",
-    leadPhone:   "phone",
-    leadVehicle: "project_type",
-    leadSpecial: "lead_special_override",
+    shopId:     "southwest-epoxy",
+    shopName:   "Southwest Epoxy",
+    retellAgentId: null, // SMS only for now
+    fieldMapping: {
+      leadName:    "first_name",
+      leadPhone:   "phone",
+      leadVehicle: "project_type",
+      leadSpecial: "lead_special_override",
+    },
   },
   "shopdesk-demo": {
   shopId:     "shopdesk-demo",
@@ -97,7 +98,6 @@ const SHOP_CONFIGS = {
     leadVehicle: "business_name",
     leadSpecial: "industry",
   },
-},
 },
 };
 
