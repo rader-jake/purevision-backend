@@ -974,7 +974,16 @@ app.post("/webhook/sms-only/:shopId", async (req, res) => {
   res.status(200).json({ received: true, leadId });
 
   // Fire SMS immediately — Jake introduces himself (consistent name)
-  const msg = `Hey ${lead.leadName}! This is Jake from Southwest Epoxy Flooring 👋 You reached out about our Spring Special — $1,499 flat for a 2-car garage, everything included. Still interested in getting that done?`;
+  // Route opening message based on shop
+  let msg;
+  if (shopId === 'shopdesk-demo') {
+    msg = `Hey ${lead.leadName}! Is this the owner of ${lead.leadVehicle}? 👋`;
+  } else if (shopId === 'southwest-epoxy') {
+    msg = `Hey ${lead.leadName}! This is Jake from Southwest Epoxy Flooring 👋 You reached out about our Spring Special — $1,499 flat for a 2-car garage, everything included. Still interested in getting that done?`;
+  } else {
+    msg = `Hey ${lead.leadName}! This is an AI assistant following up on your recent inquiry. How can I help?`;
+  }
+  // const msg = `Hey ${lead.leadName}! This is Jake from Southwest Epoxy Flooring 👋 You reached out about our Spring Special — $1,499 flat for a 2-car garage, everything included. Still interested in getting that done?`;
   await sendSMS(lead.leadPhone, msg);
 
   db.prepare(`INSERT INTO sms_messages (lead_id, direction, body) VALUES (?, ?, ?)`)
