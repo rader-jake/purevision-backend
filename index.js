@@ -1604,6 +1604,22 @@ app.post('/tools/book-estimate', async (req, res) => {
 });
 
 // ─── ROUTE: DELETE TEST LEADS ─────────────────────────────────────────────────
+app.post('/admin/delete-outreach-lead', (req, res) => {
+  const { secret, id } = req.body;
+  if (secret !== process.env.MANUAL_ENTRY_SECRET) {
+    return res.status(403).json({ error: 'Unauthorized' });
+  }
+
+  if (id) {
+    db.prepare('DELETE FROM outreach_leads WHERE id = ?').run(id);
+    return res.json({ success: true, deleted: id });
+  }
+
+  // No id = delete ALL outreach leads
+  db.prepare('DELETE FROM outreach_leads').run();
+  return res.json({ success: true, deleted: 'all' });
+});
+
 app.post('/admin/delete-test-leads', (req, res) => {
   const { secret, phone } = req.body;
   if (secret !== process.env.MANUAL_ENTRY_SECRET) {
