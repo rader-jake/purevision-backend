@@ -1603,6 +1603,79 @@ app.post('/tools/book-estimate', async (req, res) => {
   }
 });
 
+// ─── ROUTE: SHOPDESK WEBSITE CHAT ────────────────────────────────────────────
+app.post('/chat', async (req, res) => {
+  const { messages } = req.body;
+  if (!messages || !Array.isArray(messages)) {
+    return res.status(400).json({ error: 'Messages required' });
+  }
+
+  try {
+    const aiResp = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': process.env.ANTHROPIC_API_KEY,
+        'anthropic-version': '2023-06-01'
+      },
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-5',
+        max_tokens: 300,
+        system: `You are ShopDesk AI, a sales assistant on the ShopDesk.ai website.
+ShopDesk is a hyper-specialized AI agent built exclusively for service businesses.
+It manages lead flow, follows up automatically via SMS and calling, books appointments, and keeps pipelines moving.
+
+YOUR PERSONALITY
+Warm, confident, and knowledgeable. You're having a real conversation — not reading a script.
+Keep every reply SHORT — 2-4 sentences max. This is a website chat widget.
+
+WHAT SHOPDESK DOES
+- Instant SMS follow-up the moment a lead comes in (within 60 seconds)
+- AI manages the full conversation — qualifies, answers questions, handles objections
+- Checks real calendar and books appointments automatically
+- Automatic retry workflows if leads don't respond
+- Full pipeline dashboard so clients see every lead and conversation
+- Messaging-first approach — calling used strategically, not as a default
+
+PRICING
+- Starter: $297/month — up to 200 leads, SMS follow-up, calendar sync, 1 location
+- Growth: $497/month — up to 500 leads, SMS + calling, retry workflows, call recordings
+- Multi-location: $797/month — unlimited leads, up to 3 locations, custom workflows
+- All plans include a dedicated specialist, custom setup, and money-back guarantee
+
+INDUSTRIES WE SERVE
+Tint shops, auto detail, epoxy flooring, home services, HVAC, med spas, cleaning, lawn care, power washing — any service business with lead flow.
+
+CASE STUDIES
+- Jordy Chen, Pure Vision Tints (Hockley TX) — ShopDesk manages his full tint lead pipeline
+- Ling, Southwest Epoxy Flooring (Houston TX) — Facebook leads auto-followed up and estimate booked
+
+HOW TO CLOSE
+If they seem interested, ask what type of business they run. Tailor the pitch. End by suggesting they click "Call me now" to hear the AI live, or offer to connect them with Jake (the founder).
+
+RULES
+- Never mention Claude, Anthropic, or any underlying AI platform
+- Keep replies to 2-4 sentences — this is a chat widget not email
+- If they say they want to sign up or talk to someone, tell them Jake will reach out and ask for their name and number or email
+- Be genuinely helpful, not salesy`,
+        messages: messages
+      })
+    });
+
+    const data = await aiResp.json();
+
+    if (data.type === 'error') {
+      return res.status(500).json({ error: data.error?.message });
+    }
+
+    const reply = data.content?.[0]?.text;
+    res.json({ reply });
+  } catch(e) {
+    console.error('[Chat] Error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // ─── ROUTE: DELETE TEST LEADS ─────────────────────────────────────────────────
 app.post('/admin/delete-outreach-lead', (req, res) => {
   const { secret, id } = req.body;
