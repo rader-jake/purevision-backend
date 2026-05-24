@@ -1293,6 +1293,18 @@ app.post("/admin/trigger-pending", async (req, res) => {
   }
 });
 
+// Jake dashboard routes
+app.get('/api/conversations/shopdesk-demo', async (req, res) => {
+  const { password } = req.query;
+  if (password !== 'shopdesk2026') return res.status(401).json({ error: 'Unauthorized' });
+  const leads = db.prepare('SELECT * FROM leads WHERE shop_id = ?').all('shopdesk-demo');
+  const leadIds = leads.map(l => l.id);
+  if (!leadIds.length) return res.json([]);
+  const placeholders = leadIds.map(() => '?').join(',');
+  const messages = db.prepare(`SELECT * FROM sms_messages WHERE lead_id IN (${placeholders}) ORDER BY created_at ASC`).all(...leadIds);
+  res.json(messages);
+});
+
 // JORDY DASHBOARD FOR SMS
 // Add this — Jordy's SMS conversations
 app.get('/api/conversations/pure-vision-tints', async (req, res) => {
