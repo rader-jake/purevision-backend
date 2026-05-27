@@ -56,6 +56,19 @@ db.exec(`
   )
 `);
 
+// ─── SCHEDULED JOBS TABLE ─────────────────────────────────────────────────────
+db.exec(`
+  CREATE TABLE IF NOT EXISTS scheduled_jobs (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    lead_id     INTEGER NOT NULL,
+    shop_id     TEXT NOT NULL,
+    job_type    TEXT NOT NULL,
+    attempt     INTEGER DEFAULT 1,
+    send_at     TEXT NOT NULL,
+    status      TEXT DEFAULT 'pending',
+    created_at  TEXT DEFAULT (datetime('now'))
+  )
+`);
 
 try {
   db.exec(`ALTER TABLE leads ADD COLUMN call_attempts INTEGER DEFAULT 0`);
@@ -66,7 +79,7 @@ const SHOP_CONFIGS = {
   "pure-vision-tints": {
     shopId:        "pure-vision-tints",
     shopName:      "Pure Vision Tints",
-    smsOnly: true,
+    smsOnly:       true,
     webhookSecret: process.env.GHL_WEBHOOK_SECRET,
     retellAgentId: process.env.RETELL_AGENT_ID,
     fieldMapping: {
@@ -79,7 +92,7 @@ const SHOP_CONFIGS = {
   "southwest-epoxy": {
     shopId:     "southwest-epoxy",
     shopName:   "Southwest Epoxy",
-    retellAgentId: null, // SMS only for now
+    retellAgentId: null,
     fieldMapping: {
       leadName:    "first_name",
       leadPhone:   "phone",
@@ -88,17 +101,17 @@ const SHOP_CONFIGS = {
     },
   },
   "shopdesk-demo": {
-  shopId:     "shopdesk-demo",
-  shopName:   "ShopDesk AI",
-  smsOnly:    true,
-  retellAgentId: null,
-  fieldMapping: {
-    leadName:    "first_name",
-    leadPhone:   "phone",
-    leadVehicle: "business_name",
-    leadSpecial: "industry",
+    shopId:     "shopdesk-demo",
+    shopName:   "ShopDesk AI",
+    smsOnly:    true,
+    retellAgentId: null,
+    fieldMapping: {
+      leadName:    "first_name",
+      leadPhone:   "phone",
+      leadVehicle: "business_name",
+      leadSpecial: "industry",
+    },
   },
-},
 };
 
 // ─── TWILIO CLIENT ────────────────────────────────────────────────────────────
@@ -120,9 +133,9 @@ const gcal = google.calendar({ version: "v3", auth: googleAuth });
 const APPOINTMENT_SLOTS = [
   { label: "9AM",  hour: 9  },
   { label: "11AM", hour: 11 },
-  { label: "1PM", hour: 13 },
+  { label: "1PM",  hour: 13 },
   { label: "3PM",  hour: 15 },
-  { label: "5PM", hour: 17 },
+  { label: "5PM",  hour: 17 },
 ];
 
 // ─── UTILITIES ────────────────────────────────────────────────────────────────
@@ -140,19 +153,31 @@ function getCentralHour(date) {
   );
 }
 
+function isWithinSendingWindow() {
+  const hour = getCentralHour(new Date());
+  return hour >= 8 && hour < 20;
+}
+
+function minutesUntil8AM() {
+  const now = new Date();
+  const central = new Date(now.toLocaleString('en-US', { timeZone: 'America/Chicago' }));
+  const next8AM = new Date(central);
+  next8AM.setHours(8, 0, 0, 0);
+  if (central.getHours() >= 8 && central.getHours() < 20) return 0;
+  if (central.getHours() >= 20) next8AM.setDate(next8AM.getDate() + 1);
+  return Math.ceil((next8AM - central) / 60000);
+}
+
 app.use('/webhook/sms/inbound', express.raw({ type: 'application/json' }));
-
-
 
 // ─── MIDDLEWARE ───────────────────────────────────────────────────────────────
 app.use(express.json());
 
 app.use(cors({
   origin: ["https://shopdesk.ai", "https://www.shopdesk.ai", "http://localhost:3000", "null"],
-  methods: ["GET", "POST"],
+  methods: ["GET", "POST", "PATCH", "DELETE"],
 }));
 
-// At the top of index.js with your other middleware
 app.use((req, res, next) => {
   res.header('Access-Control-Allow-Origin', '*');
   res.header('Access-Control-Allow-Methods', 'GET,POST,PATCH,DELETE');
@@ -162,7 +187,6 @@ app.use((req, res, next) => {
 
 // ─── ROUTE: HEALTH CHECK ──────────────────────────────────────────────────────
 app.get("/health", (_, res) => res.json({ status: "ok" }));
-
 
 // ─── ROUTE: DEBUG CALENDAR ────────────────────────────────────────────────────
 app.get("/debug/calendar", async (req, res) => {
@@ -195,12 +219,12 @@ app.get("/debug/calendar", async (req, res) => {
 });
 
 async function bookGoogleCalendarEvent(lead) {
-  const dateTimeStr = lead.booked_at.includes("T") 
-    ? lead.booked_at 
+  const dateTimeStr = lead.booked_at.includes("T")
+    ? lead.booked_at
     : lead.booked_at.replace(" ", "T") + ":00-05:00";
-  
+
   const appointmentDate = new Date(dateTimeStr);
-  
+
   if (isNaN(appointmentDate.getTime())) {
     throw new Error(`Could not parse appointment time: ${lead.booked_at}`);
   }
@@ -237,8 +261,6 @@ app.post("/tools/book-appointment", async (req, res) => {
   const lead_special     = args.lead_special;
   const appointment_time = args.appointment_time;
 
-  console.log("[Book Tool] Resolved:", { lead_name, lead_phone, appointment_time });
-
   if (!appointment_time) {
     return res.json({
       response: "I wasn't able to lock in that time. Can you confirm the day and time again?",
@@ -253,7 +275,14 @@ app.post("/tools/book-appointment", async (req, res) => {
       WHERE lead_phone = ?
     `).run(appointment_time, lead_phone);
 
-    const lead = {
+    // Cancel any pending follow-up jobs for this lead
+    const lead = db.prepare(`SELECT id FROM leads WHERE lead_phone = ?`).get(lead_phone);
+    if (lead) {
+      db.prepare(`UPDATE scheduled_jobs SET status = 'cancelled' WHERE lead_id = ? AND status = 'pending'`)
+        .run(lead.id);
+    }
+
+    const leadObj = {
       lead_name:    lead_name    || "Customer",
       lead_phone:   lead_phone   || "",
       lead_vehicle: lead_vehicle || "your vehicle",
@@ -261,21 +290,16 @@ app.post("/tools/book-appointment", async (req, res) => {
       booked_at:    appointment_time,
     };
 
-    await bookGoogleCalendarEvent(lead);
+    await bookGoogleCalendarEvent(leadObj);
 
-    console.log(`[Book Tool] Appointment booked — ${lead_name} at ${appointment_time}`);
-
-      const date = new Date(appointment_time.replace(" ", "T") + ":00-05:00");
-      const friendlyTime = date.toLocaleString("en-US", {
-        weekday: "long",
-        month:   "long", 
-        day:     "numeric",
-        hour:    "numeric",
-        minute:  "2-digit",
-        timeZone: "America/Chicago",
-      });
-      return res.json({
-      response: `You're officially locked in for ${friendlyTime}! We look forward to taking care of your ${lead_vehicle || "vehicle"}.`,      });
+    const date = new Date(appointment_time.replace(" ", "T") + ":00-05:00");
+    const friendlyTime = date.toLocaleString("en-US", {
+      weekday: "long", month: "long", day: "numeric",
+      hour: "numeric", minute: "2-digit", timeZone: "America/Chicago",
+    });
+    return res.json({
+      response: `You're officially locked in for ${friendlyTime}! We look forward to taking care of your ${lead_vehicle || "vehicle"}.`,
+    });
 
   } catch (err) {
     console.error("[Book Tool] Error:", err.message);
@@ -337,6 +361,264 @@ function mapLead(payload, fieldMapping) {
   };
 }
 
+// ─── SEND SMS HELPER ──────────────────────────────────────────────────────────
+async function sendSMS(to, message) {
+  try {
+    const encodedTo = encodeURIComponent(to);
+    const resp = await fetch(`https://backend.blooio.com/v2/api/chats/${encodedTo}/messages`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${process.env.BLOOIO_API_KEY}`
+      },
+      body: JSON.stringify({
+        text: message,
+        fromNumber: process.env.BLOOIO_NUMBER
+      })
+    });
+    const data = await resp.json();
+    console.log('[SMS] Sent via Blooio:', JSON.stringify(data));
+    if (data.error || data.error_message) {
+      console.error('[SMS] Blooio rejected:', data.error || data.error_message);
+      return { success: false, error: data.error || data.error_message };
+    }
+    return { success: true, data };
+  } catch(e) {
+    console.error('[SMS] Failed:', e.message);
+    return { success: false, error: e.message };
+  }
+}
+
+async function sendSMSWithPhoto(to, text, imageUrl) {
+  try {
+    const encodedTo = encodeURIComponent(to);
+    const resp = await fetch(`https://backend.blooio.com/v2/api/chats/${encodedTo}/messages`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${process.env.BLOOIO_API_KEY}`
+      },
+      body: JSON.stringify({
+        text: text || '',
+        fromNumber: process.env.BLOOIO_NUMBER,
+        attachments: [imageUrl]
+      })
+    });
+    const data = await resp.json();
+    console.log('[SMS Photo] Sent:', JSON.stringify(data));
+    return data;
+  } catch(e) {
+    console.error('[SMS Photo] Failed:', e.message);
+  }
+}
+
+// ─── PHOTO MAP ────────────────────────────────────────────────────────────────
+const photoMap = {
+  'completed_garage':   'https://shopdesk.ai/epoxy/completed-garage-1.jpg',
+  'completed_garage_2': 'https://shopdesk.ai/epoxy/completed-garage-2.jpg',
+  'completed_garage_3': 'https://shopdesk.ai/epoxy/completed-garage-3.jpg',
+  'color_chart':        'https://shopdesk.ai/epoxy/color-chart.jpg',
+  'recent_job':         'https://shopdesk.ai/epoxy/completed-garage-1.jpg',
+};
+
+// ─── FOLLOW-UP MESSAGE BUILDER ────────────────────────────────────────────────
+function buildFollowUpMessage(lead, jobType, attempt) {
+  const name = lead.lead_name;
+  const shopId = lead.shop_id;
+
+  if (jobType === 'follow_up') {
+    // Never replied at all
+    if (shopId === 'pure-vision-tints') {
+      const msgs = [
+        `Hey ${name}! Marissa here from Pure Vision Tints — just checking if you're still thinking about tinting your ${lead.lead_vehicle}? We have openings this week 🙌`,
+        `Hey ${name}, last follow-up from me — if the timing isn't right no worries at all. Reach back out whenever you're ready and we'll take care of you 🙏`,
+      ];
+      return msgs[Math.min(attempt - 1, msgs.length - 1)];
+    } else if (shopId === 'southwest-epoxy') {
+      const msgs = [
+        `Hey ${name}! Jake from Southwest Epoxy — still interested in the Spring Special? $1,499 flat for a 2-car garage, we have openings this week 👋`,
+        `Hey ${name}, just one last check-in — if the timing isn't right that's totally fine. Reach back out whenever you're ready 🙏`,
+      ];
+      return msgs[Math.min(attempt - 1, msgs.length - 1)];
+    }
+  } else if (jobType === 'cold_nudge') {
+    // Was replying but went quiet
+    if (shopId === 'pure-vision-tints') {
+      const msgs = [
+        `Hey ${name}! Just checking back in — still thinking about the tint? Happy to answer any questions 😊`,
+        `Hey ${name}, no worries if the timing isn't right! Reach back out whenever you're ready 🙏`,
+      ];
+      return msgs[Math.min(attempt - 1, msgs.length - 1)];
+    } else if (shopId === 'southwest-epoxy') {
+      const msgs = [
+        `Hey ${name}! Just checking back — still interested in the epoxy? Happy to lock in a time 😊`,
+        `Hey ${name}, no pressure at all! Whenever you're ready just reach back out 🙏`,
+      ];
+      return msgs[Math.min(attempt - 1, msgs.length - 1)];
+    }
+  }
+
+  return `Hey ${name}! Just checking back in — still interested? Happy to help whenever you're ready 🙏`;
+}
+
+// ─── SCHEDULE JOBS HELPER ─────────────────────────────────────────────────────
+function scheduleFollowUpJobs(leadId, shopId) {
+  // Non-responsive follow-ups: 24h and 72h after first message
+  db.prepare(`
+    INSERT INTO scheduled_jobs (lead_id, shop_id, job_type, attempt, send_at)
+    VALUES (?, ?, 'follow_up', 1, datetime('now', '+24 hours'))
+  `).run(leadId, shopId);
+
+  db.prepare(`
+    INSERT INTO scheduled_jobs (lead_id, shop_id, job_type, attempt, send_at)
+    VALUES (?, ?, 'follow_up', 2, datetime('now', '+72 hours'))
+  `).run(leadId, shopId);
+
+  console.log(`[Jobs] Scheduled 2 follow-up jobs for lead ${leadId}`);
+}
+
+function scheduleColdNudgeJobs(leadId, shopId) {
+  // Cancel any existing cold nudge jobs first to avoid stacking
+  db.prepare(`
+    UPDATE scheduled_jobs SET status = 'cancelled'
+    WHERE lead_id = ? AND job_type = 'cold_nudge' AND status = 'pending'
+  `).run(leadId);
+
+  // Schedule fresh cold nudges: 24h and 48h from now
+  db.prepare(`
+    INSERT INTO scheduled_jobs (lead_id, shop_id, job_type, attempt, send_at)
+    VALUES (?, ?, 'cold_nudge', 1, datetime('now', '+24 hours'))
+  `).run(leadId, shopId);
+
+  db.prepare(`
+    INSERT INTO scheduled_jobs (lead_id, shop_id, job_type, attempt, send_at)
+    VALUES (?, ?, 'cold_nudge', 2, datetime('now', '+48 hours'))
+  `).run(leadId, shopId);
+
+  console.log(`[Jobs] Scheduled 2 cold nudge jobs for lead ${leadId}`);
+}
+
+function cancelAllJobsForLead(leadId) {
+  const result = db.prepare(`
+    UPDATE scheduled_jobs SET status = 'cancelled'
+    WHERE lead_id = ? AND status = 'pending'
+  `).run(leadId);
+  console.log(`[Jobs] Cancelled ${result.changes} pending jobs for lead ${leadId}`);
+}
+
+// ─── BACKGROUND JOB WORKER ───────────────────────────────────────────────────
+async function processScheduledJobs() {
+  const jobs = db.prepare(`
+    SELECT * FROM scheduled_jobs
+    WHERE status = 'pending'
+    AND send_at <= datetime('now')
+    ORDER BY send_at ASC
+    LIMIT 10
+  `).all();
+
+  if (!jobs.length) return;
+
+  console.log(`[Worker] Processing ${jobs.length} scheduled jobs`);
+
+  for (const job of jobs) {
+    try {
+      // Mark as processing to prevent double-fire
+      db.prepare(`UPDATE scheduled_jobs SET status = 'processing' WHERE id = ?`).run(job.id);
+
+      const lead = db.prepare(`SELECT * FROM leads WHERE id = ?`).get(job.lead_id);
+
+      if (!lead) {
+        db.prepare(`UPDATE scheduled_jobs SET status = 'cancelled' WHERE id = ?`).run(job.id);
+        continue;
+      }
+
+      // Skip if lead is in a terminal state
+      const skipStatuses = ['booked', 'dead', 'mia', 'opted_out'];
+      if (skipStatuses.includes(lead.call_status)) {
+        db.prepare(`UPDATE scheduled_jobs SET status = 'cancelled' WHERE id = ?`).run(job.id);
+        console.log(`[Worker] Skipping job ${job.id} — lead ${lead.lead_name} is ${lead.call_status}`);
+        continue;
+      }
+
+      if (job.job_type === 'follow_up') {
+        // Check if lead has ever replied
+        const hasReplied = db.prepare(`
+          SELECT id FROM sms_messages
+          WHERE lead_id = ? AND direction = 'inbound' LIMIT 1
+        `).get(job.lead_id);
+
+        if (hasReplied) {
+          db.prepare(`UPDATE scheduled_jobs SET status = 'cancelled' WHERE id = ?`).run(job.id);
+          console.log(`[Worker] Skipping follow_up for ${lead.lead_name} — they replied`);
+          continue;
+        }
+      }
+
+      if (job.job_type === 'cold_nudge') {
+        // Check last inbound message — if they replied recently skip
+        const lastInbound = db.prepare(`
+          SELECT created_at FROM sms_messages
+          WHERE lead_id = ? AND direction = 'inbound'
+          ORDER BY created_at DESC LIMIT 1
+        `).get(job.lead_id);
+
+        if (lastInbound) {
+          const hoursSince = (Date.now() - new Date(lastInbound.created_at)) / (1000 * 60 * 60);
+          if (hoursSince < 20) {
+            db.prepare(`UPDATE scheduled_jobs SET status = 'cancelled' WHERE id = ?`).run(job.id);
+            console.log(`[Worker] Skipping cold_nudge for ${lead.lead_name} — replied ${Math.round(hoursSince)}h ago`);
+            continue;
+          }
+        } else {
+          // No reply ever — this should be a follow_up not cold_nudge, cancel
+          db.prepare(`UPDATE scheduled_jobs SET status = 'cancelled' WHERE id = ?`).run(job.id);
+          continue;
+        }
+      }
+
+      // Check sending window — if outside, reschedule for 8AM
+      if (!isWithinSendingWindow()) {
+        const minsUntil8 = minutesUntil8AM();
+        db.prepare(`
+          UPDATE scheduled_jobs
+          SET send_at = datetime('now', '+' || ? || ' minutes'), status = 'pending'
+          WHERE id = ?
+        `).run(minsUntil8, job.id);
+        console.log(`[Worker] Job ${job.id} rescheduled for 8AM (${minsUntil8} mins)`);
+        continue;
+      }
+
+      // Build and send the message
+      const msg = buildFollowUpMessage(lead, job.job_type, job.attempt);
+      const smsResult = await sendSMS(lead.lead_phone, msg);
+
+      if (smsResult?.success !== false) {
+        db.prepare(`INSERT INTO sms_messages (lead_id, direction, body) VALUES (?, ?, ?)`)
+          .run(lead.id, 'outbound', msg);
+        db.prepare(`UPDATE scheduled_jobs SET status = 'sent' WHERE id = ?`).run(job.id);
+
+        // Mark MIA after final attempt
+        if (job.attempt >= 2) {
+          db.prepare(`UPDATE leads SET call_status = 'mia' WHERE id = ?`).run(lead.id);
+          console.log(`[Worker] Lead ${lead.lead_name} marked MIA after final ${job.job_type} attempt`);
+        }
+
+        console.log(`[Worker] Sent ${job.job_type} attempt ${job.attempt} to ${lead.lead_name}`);
+      } else {
+        db.prepare(`UPDATE scheduled_jobs SET status = 'failed' WHERE id = ?`).run(job.id);
+        console.error(`[Worker] SMS failed for job ${job.id}`);
+      }
+
+    } catch(e) {
+      console.error(`[Worker] Error processing job ${job.id}:`, e.message);
+      db.prepare(`UPDATE scheduled_jobs SET status = 'failed' WHERE id = ?`).run(job.id);
+    }
+  }
+}
+
+// Run worker every 5 minutes
+setInterval(processScheduledJobs, 5 * 60 * 1000);
+console.log('[Worker] Background job processor started — runs every 5 minutes');
 
 // ─── ROUTE: GHL WEBHOOK ───────────────────────────────────────────────────────
 app.post("/webhook/ghl/:shopId", async (req, res) => {
@@ -358,6 +640,20 @@ app.post("/webhook/ghl/:shopId", async (req, res) => {
     return res.status(400).json({ error: "No phone number" });
   }
 
+  // Duplicate check
+  const existing = db.prepare(`
+    SELECT * FROM leads
+    WHERE shop_id = ?
+    AND replace(replace(lead_phone, '+', ''), '-', '')
+      LIKE '%' || replace(replace(?, '+', ''), '-', '') || '%'
+    ORDER BY created_at DESC LIMIT 1
+  `).get(shopId, lead.leadPhone);
+
+  if (existing) {
+    console.log(`[${shopId}] Duplicate lead for ${lead.leadPhone} — skipping`);
+    return res.status(200).json({ received: true, leadId: existing.id, duplicate: true });
+  }
+
   const result = db.prepare(`
     INSERT INTO leads (shop_id, lead_name, lead_phone, lead_vehicle, lead_special)
     VALUES (?, ?, ?, ?, ?)
@@ -368,31 +664,23 @@ app.post("/webhook/ghl/:shopId", async (req, res) => {
 
   res.status(200).json({ received: true, leadId });
 
-  // Calls disabled for now — focusing on SMS
-
-  // if (process.env.CALLS_ENABLED === "true") {
-  //   try {
-  //     const callResult = await triggerRetellCall(lead, shop);
-  //     console.log(`[${shopId}] Retell call triggered:`, callResult.call_id);
-  //     db.prepare(`UPDATE leads SET call_id = ?, call_status = 'calling' WHERE id = ?`)
-  //       .run(callResult.call_id, leadId);
-  //   } catch (err) {
-  //     console.error(`[${shopId}] Failed to trigger Retell call:`, err.message);
-  //     db.prepare(`UPDATE leads SET call_status = 'call_failed' WHERE id = ?`)
-  //       .run(leadId);
-  //   }
-  // } else {
-  //   console.log(`[${shopId}] Calls disabled — lead stored, no call triggered`);
-  // }
-
   if (shop.smsOnly) {
-    const msg = `Hey ${lead.leadName}! This is Marissa with Pure Vision Tints. You reached out about tinting your ${lead.leadVehicle} — were you still interested in getting that done?`;
-    await sendSMS(lead.leadPhone, msg);
-    db.prepare(`INSERT INTO sms_messages (lead_id, direction, body) VALUES (?, ?, ?)`)
-      .run(leadId, 'outbound', msg);
-    db.prepare(`UPDATE leads SET call_status = 'sms_fallback' WHERE id = ?`)
-      .run(leadId);
-    console.log(`[${shopId}] SMS sent to ${lead.leadName} (SMS-only mode)`);
+    // Random human-like delay 30-90 seconds
+    const delay = Math.floor(Math.random() * 60000) + 30000;
+    console.log(`[${shopId}] Sending first SMS to ${lead.leadName} in ${Math.round(delay/1000)}s`);
+
+    setTimeout(async () => {
+      const msg = `Hey ${lead.leadName}! This is Marissa with Pure Vision Tints. You reached out about tinting your ${lead.leadVehicle} — were you still interested in getting that done?`;
+      const smsResult = await sendSMS(lead.leadPhone, msg);
+      if (smsResult?.success !== false) {
+        db.prepare(`INSERT INTO sms_messages (lead_id, direction, body) VALUES (?, ?, ?)`)
+          .run(leadId, 'outbound', msg);
+        db.prepare(`UPDATE leads SET call_status = 'sms_fallback' WHERE id = ?`).run(leadId);
+        scheduleFollowUpJobs(leadId, shopId);
+        console.log(`[${shopId}] First SMS sent + follow-ups scheduled for ${lead.leadName}`);
+      }
+    }, delay);
+
   } else if (process.env.CALLS_ENABLED === "true") {
     try {
       const callResult = await triggerRetellCall(lead, shop);
@@ -401,14 +689,11 @@ app.post("/webhook/ghl/:shopId", async (req, res) => {
         .run(callResult.call_id, leadId);
     } catch (err) {
       console.error(`[${shopId}] Failed to trigger Retell call:`, err.message);
-      db.prepare(`UPDATE leads SET call_status = 'call_failed' WHERE id = ?`)
-        .run(leadId);
+      db.prepare(`UPDATE leads SET call_status = 'call_failed' WHERE id = ?`).run(leadId);
     }
   } else {
     console.log(`[${shopId}] Calls disabled — lead stored, no action`);
   }
-
-
 });
 
 // ─── ROUTE: META WEBHOOK VERIFICATION ────────────────────────────────────────
@@ -417,18 +702,14 @@ app.get("/webhook/meta", (req, res) => {
   const mode         = req.query["hub.mode"];
   const token        = req.query["hub.verify_token"];
   const challenge    = req.query["hub.challenge"];
-  console.log("[Meta] Verification request received");
   if (mode === "subscribe" && token === VERIFY_TOKEN) {
-    console.log("[Meta] Webhook verified successfully");
     return res.status(200).send(challenge);
   }
-  console.error("[Meta] Verification failed — token mismatch");
   res.sendStatus(403);
 });
 
 // ─── ROUTE: META WEBHOOK ─────────────────────────────────────────────────────
 app.post("/webhook/meta", async (req, res) => {
-  console.log("\n[Meta] Webhook received:", JSON.stringify(req.body, null, 2));
   res.status(200).send("EVENT_RECEIVED");
   try {
     const entries = req.body.entry || [];
@@ -437,12 +718,8 @@ app.post("/webhook/meta", async (req, res) => {
       for (const change of changes) {
         if (change.field !== "leadgen") continue;
         const leadgenId = change.value?.leadgen_id;
-        console.log(`[Meta] New lead — leadgen_id: ${leadgenId}`);
         const leadData = await fetchMetaLead(leadgenId);
-        if (!leadData) {
-          console.error("[Meta] Could not fetch lead data");
-          continue;
-        }
+        if (!leadData) continue;
         const result = db.prepare(`
           INSERT INTO leads (shop_id, lead_name, lead_phone, lead_vehicle, lead_special)
           VALUES (?, ?, ?, ?, ?)
@@ -454,21 +731,19 @@ app.post("/webhook/meta", async (req, res) => {
           leadData.special || "Ceramic Special"
         );
         const leadId = result.lastInsertRowid;
-        console.log(`[Meta] Lead stored — id: ${leadId}, name: ${leadData.name}`);
-        if (process.env.CALLS_ENABLED === "true" && leadData.phone) {
+        if (leadData.phone) {
           const shop = SHOP_CONFIGS["pure-vision-tints"];
-          try {
-            const callResult = await triggerRetellCall({
-              leadName:    leadData.name,
-              leadPhone:   leadData.phone,
-              leadVehicle: leadData.vehicle || "your vehicle",
-              leadSpecial: leadData.special || "Ceramic Special",
-            }, shop);
-            db.prepare(`UPDATE leads SET call_id = ?, call_status = 'calling' WHERE id = ?`)
-              .run(callResult.call_id, leadId);
-            console.log(`[Meta] Call triggered for ${leadData.name}`);
-          } catch (err) {
-            console.error(`[Meta] Call failed:`, err.message);
+          if (shop.smsOnly) {
+            const delay = Math.floor(Math.random() * 60000) + 30000;
+            setTimeout(async () => {
+              const msg = `Hey ${leadData.name}! This is Marissa with Pure Vision Tints. You reached out about tinting your ${leadData.vehicle || 'vehicle'} — were you still interested in getting that done?`;
+              const smsResult = await sendSMS(leadData.phone, msg);
+              if (smsResult?.success !== false) {
+                db.prepare(`INSERT INTO sms_messages (lead_id, direction, body) VALUES (?, ?, ?)`)
+                  .run(leadId, 'outbound', msg);
+                scheduleFollowUpJobs(leadId, 'pure-vision-tints');
+              }
+            }, delay);
           }
         }
       }
@@ -485,13 +760,11 @@ async function fetchMetaLead(leadgenId) {
       `https://graph.facebook.com/v19.0/${leadgenId}?access_token=${process.env.META_PAGE_ACCESS_TOKEN}`
     );
     const data = await response.json();
-    console.log("[Meta] Raw lead data:", JSON.stringify(data, null, 2));
     if (!data.field_data) return null;
     const fields = {};
     data.field_data.forEach(field => {
       fields[field.name.toLowerCase()] = field.values?.[0];
     });
-    console.log("[Meta] Parsed fields:", fields);
     return {
       name:    fields["full_name"]    || fields["name"]    || null,
       phone:   fields["phone_number"] || fields["phone"]   || null,
@@ -523,10 +796,10 @@ const smsTools = [
     input_schema: {
       type: "object",
       properties: {
-        lead_name: { type: "string" },
-        lead_phone: { type: "string" },
-        lead_vehicle: { type: "string" },
-        lead_special: { type: "string" },
+        lead_name:        { type: "string" },
+        lead_phone:       { type: "string" },
+        lead_vehicle:     { type: "string" },
+        lead_special:     { type: "string" },
         appointment_time: { type: "string", description: "Format: YYYY-MM-DD HH:mm" }
       },
       required: ["lead_name", "lead_phone", "lead_vehicle", "lead_special", "appointment_time"]
@@ -551,6 +824,7 @@ LEAD INFO
 - Phone: ${lead.lead_phone}
 
 THE SPRING SPECIAL (PRIMARY OFFER)
+- 1-car garage: $1,000 flat (not advertised, only quote if they ask or have a smaller garage)
 - 2-car garage: $1,499 flat — this is our most popular package
 - 3-car garage: $1,800 flat
 - Includes: pigmented base coat, decorative flakes (customer picks color), clear topcoat
@@ -645,6 +919,7 @@ RULES
 - Never confirm a booking without calling book_estimate
 - Never mention Claude, Anthropic, or any AI platform
 - Never reveal cost breakdowns or profit margins
+- You CAN send photos — always use [SEND_PHOTO: key] tags, never tell the customer you cannot send photos
 - If they say STOP → "No problem! Feel free to reach out anytime 🙏" then stop
 - Our website: southwestepoxy.com — THIS IS THE ONLY CORRECT URL, never use any other domain
 - NEVER say southwestepoxyflooring.com or any variation — only southwestepoxy.com
@@ -652,15 +927,13 @@ RULES
 - Today's date is ${new Date().toLocaleDateString('en-US', { timeZone: 'America/Chicago' })}`;
   }
 
-  // Shopdesk demo script — this is a demo script to show off the capabilities of ShopDesk AI in a real conversation with a potential client. The goal is to impress them so much that they want to sign up on the spot. The fact that they're talking to an AI right now IS the demo — lean into it and make it part of the conversation.
-
   if (lead.shop_id === 'shopdesk-demo') {
-  return `You are Shoppy, an AI sales assistant for ShopDesk AI.
+    return `You are Shoppy, an AI sales assistant for ShopDesk AI.
 Your job is to demonstrate ShopDesk AI's capabilities to a potential client by having a real conversation with them over SMS — and in doing so, proving the product works.
 
 LEAD INFO
 - Name: ${lead.lead_name}
-- Business: ${lead.lead_vehicle} (used to store business name)
+- Business: ${lead.lead_vehicle}
 - Industry: ${lead.lead_special}
 - Phone: ${lead.lead_phone}
 
@@ -704,7 +977,7 @@ Med spa: "Aesthetic leads are sensitive — they want to feel heard and informed
 Default: "For any service business, the #1 reason leads don't convert is slow follow-up. ShopDesk solves that completely."
 
 CLOSING
-"The best part — we're running a founding client special right now. $197/month, locked in for life. You'd be one of our first 10 clients so you get white-glove setup and direct access to our team.
+"The best part — we're running a founding client special right now. $297/month, locked in for life. You'd be one of our first clients so you get white-glove setup and direct access to our team.
 
 Want me to set up a quick demo specific to ${lead.lead_vehicle}? I can show you exactly how it would look for your business."
 
@@ -712,7 +985,7 @@ IF THEY SAY YES:
 "Perfect! Jake (our founder) will reach out to get you set up. What's the best way to connect — call, text, or email?"
 
 IF THEY HAVE OBJECTIONS:
-"Too expensive" → "At $197/month, if ShopDesk books you even one extra job a month it's already paid for itself. Most of our clients see that in the first week."
+"Too expensive" → "At $297/month, if ShopDesk books you even one extra job a month it's already paid for itself. Most of our clients see that in the first week."
 "I already have someone doing this" → "That's great — ShopDesk doesn't replace your team, it handles the after-hours and overflow so nothing slips through. Your person focuses on the important stuff, Shoppy handles the rest."
 "I need to think about it" → "Totally fair. I'll follow up in a couple days — and if you want to see it in action for your specific business just say the word. No pressure at all 🙏"
 "Not interested" → "No worries at all! If anything changes or you know another business owner who could use this, keep us in mind. Have a great day 🙏"
@@ -724,7 +997,7 @@ RULES
 - Never mention Claude, Anthropic, or any underlying AI platform
 - Always use their first name
 - Today's date is ${new Date().toLocaleDateString('en-US', { timeZone: 'America/Chicago' })}`;
-}
+  }
 
   // Default — Pure Vision Tints
   return `You are Marissa, Pure Vision Tints' AI receptionist texting with a lead.
@@ -743,7 +1016,7 @@ LEAD INFO
 PRICING & SERVICES
 Carbon Special — $199: all side windows + rear windshield, GeoShield carbon film
 Ceramic Special — $395: all side windows + rear windshield + visor, Xpel XR Black ceramic, blocks 85% IR heat and 99% UV
-Tint Removal — $50 extra if they have existing tint however, with the special the inquired about it's free 
+Tint Removal — $50 extra if they have existing tint however, with the special they inquired about it's free
 Visor: $40 | 2 Carbon doors: $40 | 2 Ceramic doors: $80
 Carbon windshield: $125 | Ceramic windshield: $150
 Shades: 5%, 15%, 20%, 30%, 50%, 70% — shade does NOT affect price
@@ -808,10 +1081,10 @@ function getSMSTools(lead) {
         input_schema: {
           type: "object",
           properties: {
-            lead_name: { type: "string" },
-            lead_phone: { type: "string" },
-            lead_address: { type: "string", description: "Full address where estimate will take place" },
-            project_type: { type: "string" },
+            lead_name:        { type: "string" },
+            lead_phone:       { type: "string" },
+            lead_address:     { type: "string", description: "Full address where estimate will take place" },
+            project_type:     { type: "string" },
             appointment_time: { type: "string", description: "Format: YYYY-MM-DD HH:mm" }
           },
           required: ["lead_name", "lead_phone", "lead_address", "appointment_time"]
@@ -819,15 +1092,49 @@ function getSMSTools(lead) {
       }
     ];
   }
+  if (lead.shop_id === 'shopdesk-demo') {
+    return []; // No tools for demo agent
+  }
   return smsTools;
 }
 
 // ─── SMS AGENT LOOP ───────────────────────────────────────────────────────────
+function sanitizeMessages(messages) {
+  const cleaned = [];
+  for (let i = 0; i < messages.length; i++) {
+    const msg = messages[i];
+    if (msg.role === 'assistant' && Array.isArray(msg.content)) {
+      const hasToolUse = msg.content.some(b => b.type === 'tool_use');
+      if (hasToolUse) {
+        const next = messages[i + 1];
+        const nextHasToolResult = next?.role === 'user' &&
+          Array.isArray(next?.content) &&
+          next.content.some(b => b.type === 'tool_result');
+        if (!nextHasToolResult) {
+          console.log('[SMS Agent] Skipping orphaned tool_use block');
+          i++;
+          continue;
+        }
+      }
+    }
+    cleaned.push(msg);
+  }
+  return cleaned;
+}
+
 async function runSMSAgent(messages, lead) {
-  let currentMessages = [...messages];
+  let currentMessages = sanitizeMessages([...messages]);
   const tools = getSMSTools(lead);
 
   while (true) {
+    const requestBody = {
+      model: 'claude-sonnet-4-5',
+      max_tokens: 500,
+      system: buildSMSSystemPrompt(lead),
+      messages: currentMessages
+    };
+    if (tools.length > 0) requestBody.tools = tools;
+
     const aiResp = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: {
@@ -835,17 +1142,17 @@ async function runSMSAgent(messages, lead) {
         'x-api-key': process.env.ANTHROPIC_API_KEY,
         'anthropic-version': '2023-06-01'
       },
-      body: JSON.stringify({
-        model: 'claude-sonnet-4-5',
-        max_tokens: 500,
-        system: buildSMSSystemPrompt(lead),
-        tools,
-        messages: currentMessages
-      })
+      body: JSON.stringify(requestBody)
     });
 
     const aiData = await aiResp.json();
     console.log('[SMS Agent] Claude response:', JSON.stringify(aiData, null, 2));
+
+    if (aiData.type === 'error') {
+      console.error('[SMS Agent] Claude API error:', aiData.error?.message);
+      return null;
+    }
+
     const { content, stop_reason } = aiData;
 
     if (stop_reason === 'tool_use') {
@@ -853,13 +1160,11 @@ async function runSMSAgent(messages, lead) {
       const toolName = toolUse.name;
       const toolInput = toolUse.input;
 
-      console.log(`[SMS Agent] Tool call: ${toolName}`, toolInput);
-
       const endpointMap = {
-        'get_availability': 'get-availability',
-        'book_appointment': 'book-appointment',
+        'get_availability':       'get-availability',
+        'book_appointment':       'book-appointment',
         'get_epoxy_availability': 'get-epoxy-availability',
-        'book_estimate': 'book-estimate'
+        'book_estimate':          'book-estimate'
       };
 
       let toolResult;
@@ -878,8 +1183,6 @@ async function runSMSAgent(messages, lead) {
         toolResult = { error: 'Tool call failed: ' + e.message };
       }
 
-      console.log(`[SMS Agent] Tool result:`, toolResult);
-
       currentMessages = [
         ...currentMessages,
         { role: 'assistant', content },
@@ -892,7 +1195,6 @@ async function runSMSAgent(messages, lead) {
           }]
         }
       ];
-
       continue;
     }
 
@@ -901,62 +1203,7 @@ async function runSMSAgent(messages, lead) {
   }
 }
 
-// ─── SEND SMS HELPER ──────────────────────────────────────────────────────────
-async function sendSMS(to, message) {
-  try {
-    const encodedTo = encodeURIComponent(to);
-    const resp = await fetch(`https://backend.blooio.com/v2/api/chats/${encodedTo}/messages`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${process.env.BLOOIO_API_KEY}`
-      },
-      body: JSON.stringify({
-        text: message,
-        fromNumber: process.env.BLOOIO_NUMBER
-      })
-    });
-    const data = await resp.json();
-    console.log('[SMS] Sent via Blooio:', JSON.stringify(data));
-    return data;
-  } catch(e) {
-    console.error('[SMS] Failed:', e.message);
-  }
-}
-
-async function sendSMSWithPhoto(to, text, imageUrl) {
-  try {
-    const encodedTo = encodeURIComponent(to);
-    const resp = await fetch(`https://backend.blooio.com/v2/api/chats/${encodedTo}/messages`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${process.env.BLOOIO_API_KEY}`
-      },
-      body: JSON.stringify({
-        text: text || '',
-        fromNumber: process.env.BLOOIO_NUMBER,
-        attachments: [imageUrl]
-      })
-    });
-    const data = await resp.json();
-    console.log('[SMS Photo] Sent:', JSON.stringify(data));
-    return data;
-  } catch(e) {
-    console.error('[SMS Photo] Failed:', e.message);
-  }
-}
-
-// ─── PHOTO MAP ────────────────────────────────────────────────────────────────
-const photoMap = {
-  'completed_garage':   'https://shopdesk.ai/epoxy/completed-garage-1.jpg',
-  'completed_garage_2': 'https://shopdesk.ai/epoxy/completed-garage-2.jpg',
-  'completed_garage_3': 'https://shopdesk.ai/epoxy/completed-garage-3.jpg',
-  'color_chart':        'https://shopdesk.ai/epoxy/color-chart.jpg',
-  'recent_job':         'https://shopdesk.ai/epoxy/completed-garage-1.jpg',
-};
-
-// SMS-ONLY WEBHOOK FOR SOUTHWEST EPOXY (NO CALLS) ─────────────────────────────
+// ─── SMS-ONLY WEBHOOK ─────────────────────────────────────────────────────────
 app.post("/webhook/sms-only/:shopId", async (req, res) => {
   const { shopId } = req.params;
   const shop = SHOP_CONFIGS[shopId];
@@ -964,6 +1211,20 @@ app.post("/webhook/sms-only/:shopId", async (req, res) => {
 
   const lead = mapLead(req.body, shop.fieldMapping);
   if (!lead.leadPhone) return res.status(400).json({ error: "No phone" });
+
+  // Duplicate check
+  const existing = db.prepare(`
+    SELECT * FROM leads
+    WHERE shop_id = ?
+    AND replace(replace(lead_phone, '+', ''), '-', '')
+      LIKE '%' || replace(replace(?, '+', ''), '-', '') || '%'
+    ORDER BY created_at DESC LIMIT 1
+  `).get(shopId, lead.leadPhone);
+
+  if (existing) {
+    console.log(`[${shopId}] Duplicate lead for ${lead.leadPhone} — skipping`);
+    return res.status(200).json({ received: true, leadId: existing.id, duplicate: true });
+  }
 
   const result = db.prepare(`
     INSERT INTO leads (shop_id, lead_name, lead_phone, lead_vehicle, lead_special)
@@ -973,23 +1234,33 @@ app.post("/webhook/sms-only/:shopId", async (req, res) => {
   const leadId = result.lastInsertRowid;
   res.status(200).json({ received: true, leadId });
 
-  // Fire SMS immediately — Jake introduces himself (consistent name)
-  // Route opening message based on shop
-  let msg;
-  if (shopId === 'shopdesk-demo') {
-    msg = `Hey ${lead.leadName}! Is this the owner of ${lead.leadVehicle}? 👋`;
-  } else if (shopId === 'southwest-epoxy') {
-    msg = `Hey ${lead.leadName}! This is Jake from Southwest Epoxy Flooring 👋 You reached out about our Spring Special — $1,499 flat for a 2-car garage, everything included. Still interested in getting that done?`;
-  } else {
-    msg = `Hey ${lead.leadName}! This is an AI assistant following up on your recent inquiry. How can I help?`;
-  }
-  // const msg = `Hey ${lead.leadName}! This is Jake from Southwest Epoxy Flooring 👋 You reached out about our Spring Special — $1,499 flat for a 2-car garage, everything included. Still interested in getting that done?`;
-  await sendSMS(lead.leadPhone, msg);
+  // Random human-like delay 30-90 seconds
+  const delay = Math.floor(Math.random() * 60000) + 30000;
+  console.log(`[${shopId}] Sending first SMS to ${lead.leadName} in ${Math.round(delay/1000)}s`);
 
-  db.prepare(`INSERT INTO sms_messages (lead_id, direction, body) VALUES (?, ?, ?)`)
-    .run(leadId, 'outbound', msg);
+  setTimeout(async () => {
+    let msg;
+    if (shopId === 'shopdesk-demo') {
+      msg = `Hey ${lead.leadName}! Is this the owner of ${lead.leadVehicle}? 👋`;
+    } else if (shopId === 'southwest-epoxy') {
+      msg = `Hey ${lead.leadName}! This is Jake from Southwest Epoxy Flooring 👋 You reached out about our Spring Special — $1,499 flat for a 2-car garage, everything included. Still interested in getting that done?`;
+    } else {
+      msg = `Hey ${lead.leadName}! This is Marissa with Pure Vision Tints. You reached out about tinting your ${lead.leadVehicle} — were you still interested in getting that done?`;
+    }
 
-  console.log(`[${shopId}] SMS sent to ${lead.leadName}`);
+    const smsResult = await sendSMS(lead.leadPhone, msg);
+    if (smsResult?.success !== false) {
+      db.prepare(`INSERT INTO sms_messages (lead_id, direction, body) VALUES (?, ?, ?)`)
+        .run(leadId, 'outbound', msg);
+
+      // Only schedule follow-ups for real leads — not demo
+      if (shopId !== 'shopdesk-demo') {
+        scheduleFollowUpJobs(leadId, shopId);
+      }
+
+      console.log(`[${shopId}] First SMS sent to ${lead.leadName} — follow-ups scheduled`);
+    }
+  }, delay);
 });
 
 // ─── INBOUND SMS WEBHOOK ──────────────────────────────────────────────────────
@@ -997,7 +1268,6 @@ app.post('/webhook/sms/inbound',
   express.raw({ type: 'application/json' }),
   async (req, res) => {
     const rawBody = Buffer.isBuffer(req.body) ? req.body : Buffer.from(JSON.stringify(req.body));
-
     const signature = req.headers['x-blooio-signature'] ?? '';
     const payload_preview = JSON.parse(rawBody.toString('utf8'));
     const event = req.headers['x-blooio-event'] || payload_preview.event || '';
@@ -1009,40 +1279,23 @@ app.post('/webhook/sms/inbound',
           const [key, value] = part.split('=');
           parts[key] = value;
         });
-
         const timestamp = parts['t'];
         const v1 = parts['v1'];
-
-        if (!timestamp || !v1) {
-          console.log('[SMS] Invalid signature format');
-          return res.sendStatus(401);
-        }
-
+        if (!timestamp || !v1) return res.sendStatus(401);
         const signedPayload = `${timestamp}.${rawBody.toString('utf8')}`;
         const expected = crypto
           .createHmac('sha256', process.env.BLOOIO_SECRET)
           .update(signedPayload)
           .digest('hex');
-
-        console.log('[SMS] v1 received:', v1);
-        console.log('[SMS] expected:', expected);
-
-        if (expected !== v1) {
-          console.log('[SMS] Invalid Blooio signature — rejected');
-          return res.sendStatus(401);
-        }
+        if (expected !== v1) return res.sendStatus(401);
       } catch(e) {
-        console.log('[SMS] Signature check failed:', e.message);
         return res.sendStatus(401);
       }
     }
 
     res.sendStatus(200);
 
-    if (event !== 'message.received') {
-      console.log('[SMS] Ignoring event type:', event);
-      return;
-    }
+    if (event !== 'message.received') return;
 
     try {
       const payload = JSON.parse(rawBody.toString('utf8'));
@@ -1054,8 +1307,8 @@ app.post('/webhook/sms/inbound',
       console.log(`[SMS Inbound] From: ${from} — "${content}"`);
 
       const lead = db.prepare(`
-        SELECT * FROM leads 
-        WHERE replace(replace(replace(lead_phone, '+', ''), '-', ''), ' ', '') 
+        SELECT * FROM leads
+        WHERE replace(replace(replace(lead_phone, '+', ''), '-', ''), ' ', '')
           LIKE '%' || replace(replace(replace(?, '+', ''), '-', ''), ' ', '') || '%'
         ORDER BY created_at DESC LIMIT 1
       `).get(from);
@@ -1065,8 +1318,14 @@ app.post('/webhook/sms/inbound',
         return;
       }
 
+      // Cancel non-responsive follow-ups since they replied
+      db.prepare(`
+        UPDATE scheduled_jobs SET status = 'cancelled'
+        WHERE lead_id = ? AND job_type = 'follow_up' AND status = 'pending'
+      `).run(lead.id);
+
       const history = db.prepare(`
-        SELECT * FROM sms_messages 
+        SELECT * FROM sms_messages
         WHERE lead_id = ? ORDER BY created_at ASC
       `).all(lead.id);
 
@@ -1088,7 +1347,7 @@ app.post('/webhook/sms/inbound',
         }
       }
 
-      // Send clean text reply (photos stripped out)
+      // Send clean text reply
       const cleanReply = reply.replace(/\[SEND_PHOTO: \w+\]/g, '').trim();
       if (cleanReply) await sendSMS(from, cleanReply);
 
@@ -1096,6 +1355,11 @@ app.post('/webhook/sms/inbound',
         .run(lead.id, 'inbound', content);
       db.prepare(`INSERT INTO sms_messages (lead_id, direction, body) VALUES (?, ?, ?)`)
         .run(lead.id, 'outbound', cleanReply);
+
+      // Schedule cold nudge — if they go quiet we'll follow up
+      if (lead.shop_id !== 'shopdesk-demo') {
+        scheduleColdNudgeJobs(lead.id, lead.shop_id);
+      }
 
       console.log(`[SMS] Replied to ${lead.lead_name}: "${cleanReply}"`);
 
@@ -1116,16 +1380,10 @@ app.post("/webhook/retell/call-ended", async (req, res) => {
     return res.status(200).json({ ok: true });
   }
 
-  console.log(`[Retell] Call ended — id: ${call_id}, status: ${status}`);
-
   if (!call_id) return res.status(200).json({ ok: true });
 
   const lead = db.prepare(`SELECT * FROM leads WHERE call_id = ?`).get(call_id);
-
-  if (!lead) {
-    console.warn(`[Retell] No lead found for call_id: ${call_id}`);
-    return res.status(200).json({ ok: true });
-  }
+  if (!lead) return res.status(200).json({ ok: true });
 
   const statusMap = {
     ended:      "completed",
@@ -1139,12 +1397,10 @@ app.post("/webhook/retell/call-ended", async (req, res) => {
 
   if (newStatus === 'no_answer' || newStatus === 'call_failed') {
     const attempts = (lead.call_attempts || 0) + 1;
-
     db.prepare(`UPDATE leads SET call_attempts = ?, call_status = ? WHERE id = ?`)
       .run(attempts, newStatus, lead.id);
 
     if (attempts === 1) {
-      console.log(`[Retry] Double dial for ${lead.lead_name} in 2 min`);
       setTimeout(async () => {
         try {
           const shop = SHOP_CONFIGS[lead.shop_id];
@@ -1156,28 +1412,25 @@ app.post("/webhook/retell/call-ended", async (req, res) => {
           }, shop);
           db.prepare(`UPDATE leads SET call_id = ?, call_status = 'calling' WHERE id = ?`)
             .run(callResult.call_id, lead.id);
-          console.log(`[Retry] Double dial triggered for ${lead.lead_name}`);
         } catch(e) {
           console.error(`[Retry] Double dial failed:`, e.message);
         }
       }, 2 * 60 * 1000);
-
     } else if (attempts >= 2) {
-      console.log(`[SMS Fallback] Sending to ${lead.lead_name} after ${attempts} failed calls`);
       const msg = `Hey ${lead.lead_name}! This is Marissa from Pure Vision Tints 🚗 We tried reaching you about tinting your ${lead.lead_vehicle} but couldn't connect. Still interested? Just reply here and I'll get you taken care of real quick 👍`;
       await sendSMS(lead.lead_phone, msg);
       db.prepare(`INSERT INTO sms_messages (lead_id, direction, body) VALUES (?, ?, ?)`)
         .run(lead.id, 'outbound', msg);
-      db.prepare(`UPDATE leads SET call_status = 'sms_fallback' WHERE id = ?`)
-        .run(lead.id);
+      db.prepare(`UPDATE leads SET call_status = 'sms_fallback' WHERE id = ?`).run(lead.id);
+      scheduleFollowUpJobs(lead.id, lead.shop_id);
     }
-
   } else {
-    db.prepare(`UPDATE leads SET call_status = ? WHERE id = ?`)
-      .run(newStatus, lead.id);
+    db.prepare(`UPDATE leads SET call_status = ? WHERE id = ?`).run(newStatus, lead.id);
+    if (newStatus === 'completed' || newStatus === 'booked') {
+      cancelAllJobsForLead(lead.id);
+    }
   }
 
-  console.log(`[Retell] Lead ${lead.lead_name} updated to: ${newStatus}`);
   return res.status(200).json({ ok: true });
 });
 
@@ -1186,8 +1439,6 @@ app.post("/tools/get-availability", async (req, res) => {
   const raw  = req.body;
   const args = raw.args || raw;
   const date = args.date;
-  console.log("\n[Availability Tool] Raw body:", JSON.stringify(raw, null, 2));
-  console.log("[Availability Tool] Resolved date:", date);
   if (!date) {
     return res.json({
       response:        "We have 9AM, 12PM, and 3PM available tomorrow. Which works best for you?",
@@ -1199,7 +1450,6 @@ app.post("/tools/get-availability", async (req, res) => {
     const dateStr   = getCentralDateString(checkDate);
     const dayStart  = new Date(`${dateStr}T00:00:00-05:00`);
     const dayEnd    = new Date(`${dateStr}T23:59:59-05:00`);
-    console.log(`[Availability Tool] Checking: ${dateStr}`);
     const response = await gcal.events.list({
       calendarId:   process.env.GOOGLE_CALENDAR_ID,
       timeMin:      dayStart.toISOString(),
@@ -1209,16 +1459,10 @@ app.post("/tools/get-availability", async (req, res) => {
     });
     const existingEvents = response.data.items || [];
     const bookedHours = existingEvents.map(event => {
-      const start       = new Date(event.start.dateTime || event.start.date);
-      const centralHour = getCentralHour(start);
-      console.log(`[Availability Tool] Booked: "${event.summary}" at hour ${centralHour}`);
-      return centralHour;
+      const start = new Date(event.start.dateTime || event.start.date);
+      return getCentralHour(start);
     });
-    console.log(`[Availability Tool] All booked hours: ${bookedHours}`);
-    const availableSlots = APPOINTMENT_SLOTS.filter(
-      slot => !bookedHours.includes(slot.hour)
-    );
-    console.log(`[Availability Tool] Available: ${availableSlots.map(s => s.label)}`);
+    const availableSlots = APPOINTMENT_SLOTS.filter(slot => !bookedHours.includes(slot.hour));
     const friendlyDate = checkDate.toLocaleDateString("en-US", {
       weekday: "long", month: "long", day: "numeric", timeZone: "America/Chicago",
     });
@@ -1230,9 +1474,8 @@ app.post("/tools/get-availability", async (req, res) => {
         friendly_date:   friendlyDate,
       });
     }
-    const slotList = availableSlots.map(s => s.label).join(", ");
     return res.json({
-      response:        `We have ${slotList} available on ${friendlyDate}. Which works best for you?`,
+      response:        `We have ${availableSlots.map(s => s.label).join(", ")} available on ${friendlyDate}. Which works best for you?`,
       available_slots: availableSlots.map(s => s.label),
       date:            dateStr,
       friendly_date:   friendlyDate,
@@ -1246,14 +1489,120 @@ app.post("/tools/get-availability", async (req, res) => {
   }
 });
 
-// ─── ROUTE: SEND DEPOSIT LINK — DISABLED UNTIL TWILIO A2P APPROVED ───────────
-// app.post("/tools/send-deposit", async (req, res) => { ... });
+// ─── ROUTE: GET EPOXY AVAILABILITY ───────────────────────────────────────────
+app.post('/tools/get-epoxy-availability', async (req, res) => {
+  const raw  = req.body;
+  const args = raw.args || raw;
+  const date = args.date;
 
-// ─── ROUTE: SQUARE PAYMENT WEBHOOK — DISABLED UNTIL DEPOSIT LINK RE-ENABLED ──
-// app.post("/webhooks/square", async (req, res) => { ... });
+  if (!date) {
+    return res.json({
+      response:        'We have morning and afternoon slots available. What day works for you?',
+      available_slots: ['9AM', '12PM', '3PM', '6PM']
+    });
+  }
 
-// ─── ROUTE: CHECK DEPOSIT STATUS — DISABLED UNTIL DEPOSIT LINK RE-ENABLED ────
-// app.post("/tools/check-deposit-status", async (req, res) => { ... });
+  try {
+    const checkDate = new Date(date + 'T12:00:00-05:00');
+    const dateStr   = getCentralDateString(checkDate);
+    const dayStart  = new Date(`${dateStr}T00:00:00-05:00`);
+    const dayEnd    = new Date(`${dateStr}T23:59:59-05:00`);
+
+    const response = await gcal.events.list({
+      calendarId:   process.env.EPOXY_CALENDAR_ID,
+      timeMin:      dayStart.toISOString(),
+      timeMax:      dayEnd.toISOString(),
+      singleEvents: true,
+      orderBy:      'startTime',
+    });
+
+    const bookedHours = (response.data.items || []).map(e => {
+      return getCentralHour(new Date(e.start.dateTime || e.start.date));
+    });
+
+    const ESTIMATE_SLOTS = [
+      { label: '9AM',  hour: 9  },
+      { label: '12PM', hour: 12 },
+      { label: '3PM',  hour: 15 },
+      { label: '6PM',  hour: 18 },
+    ];
+
+    const available = ESTIMATE_SLOTS.filter(s => !bookedHours.includes(s.hour));
+    const friendlyDate = checkDate.toLocaleDateString('en-US', {
+      weekday: 'long', month: 'long', day: 'numeric', timeZone: 'America/Chicago'
+    });
+
+    if (!available.length) {
+      return res.json({ response: `We're fully booked on ${friendlyDate}. Would another day work for you?`, available_slots: [] });
+    }
+
+    return res.json({
+      response:        `We have ${available.map(s => s.label).join(', ')} available on ${friendlyDate}. Which works best for you?`,
+      available_slots: available.map(s => s.label),
+      date:            dateStr,
+      friendly_date:   friendlyDate
+    });
+  } catch(e) {
+    console.error('[Epoxy Availability] Error:', e.message);
+    return res.json({
+      response:        'We have 9AM, 12PM, 3PM, and 6PM available. Which works for you?',
+      available_slots: ['9AM', '12PM', '3PM', '6PM']
+    });
+  }
+});
+
+// ─── ROUTE: BOOK EPOXY ESTIMATE ───────────────────────────────────────────────
+app.post('/tools/book-estimate', async (req, res) => {
+  const raw  = req.body;
+  const args = raw.args || raw;
+  const { lead_name, lead_phone, lead_address, project_type, appointment_time } = args;
+
+  if (!appointment_time) {
+    return res.json({ response: "I wasn't able to lock that in. Can you confirm the day and time again?", success: false });
+  }
+
+  try {
+    const dateTimeStr = appointment_time.includes('T')
+      ? appointment_time
+      : appointment_time.replace(' ', 'T') + ':00-05:00';
+
+    const appointmentDate = new Date(dateTimeStr);
+    const endDate = new Date(appointmentDate.getTime() + 60 * 60 * 1000);
+
+    await gcal.events.insert({
+      calendarId: process.env.EPOXY_CALENDAR_ID,
+      requestBody: {
+        summary:     `Free Estimate — ${lead_name}`,
+        description: `Project: ${project_type || 'Epoxy Flooring'}\nAddress: ${lead_address || 'TBD'}\nPhone: ${lead_phone}`,
+        start: { dateTime: appointmentDate.toISOString(), timeZone: 'America/Chicago' },
+        end:   { dateTime: endDate.toISOString(),         timeZone: 'America/Chicago' },
+      }
+    });
+
+    const lead = db.prepare(`SELECT id FROM leads WHERE lead_phone = ?`).get(lead_phone);
+    if (lead) {
+      db.prepare(`UPDATE leads SET booked_at = ?, call_status = 'booked', lead_vehicle = ? WHERE id = ?`)
+        .run(appointment_time, lead_address || 'Address TBD', lead.id);
+      cancelAllJobsForLead(lead.id);
+    }
+
+    const friendlyTime = appointmentDate.toLocaleString('en-US', {
+      weekday: 'long', month: 'long', day: 'numeric',
+      hour: 'numeric', minute: '2-digit', timeZone: 'America/Chicago'
+    });
+
+    return res.json({
+      response: `You're all set! Ling will come by ${lead_address} on ${friendlyTime} for your free estimate. See you then! 🙌`,
+      success: true
+    });
+  } catch(e) {
+    console.error('[Book Estimate] Error:', e.message);
+    return res.json({
+      response: `You're confirmed for ${appointment_time}. Ling will reach out to confirm the address. Looking forward to it!`,
+      success: true
+    });
+  }
+});
 
 // ─── ROUTE: TRIGGER ALL PENDING LEADS ────────────────────────────────────────
 app.post("/admin/trigger-pending", async (req, res) => {
@@ -1293,35 +1642,122 @@ app.post("/admin/trigger-pending", async (req, res) => {
   }
 });
 
-// Jake dashboard routes
-app.get('/api/conversations/shopdesk-demo', async (req, res) => {
-  const { password } = req.query;
-  if (password !== 'shopdesk2026') return res.status(401).json({ error: 'Unauthorized' });
-  const leads = db.prepare('SELECT * FROM leads WHERE shop_id = ?').all('shopdesk-demo');
-  const leadIds = leads.map(l => l.id);
-  if (!leadIds.length) return res.json([]);
-  const placeholders = leadIds.map(() => '?').join(',');
-  const messages = db.prepare(`SELECT * FROM sms_messages WHERE lead_id IN (${placeholders}) ORDER BY created_at ASC`).all(...leadIds);
-  res.json(messages);
+// ─── ROUTE: UPDATE LEAD STATUS ────────────────────────────────────────────────
+app.post('/admin/update-lead-status', (req, res) => {
+  const { secret, lead_id, status } = req.body;
+  if (secret !== process.env.MANUAL_ENTRY_SECRET) {
+    return res.status(403).json({ error: 'Unauthorized' });
+  }
+  const validStatuses = ['pending', 'booked', 'dead', 'mia', 'opted_out', 'sms_fallback', 'completed', 'calling'];
+  if (!validStatuses.includes(status)) {
+    return res.status(400).json({ error: 'Invalid status' });
+  }
+  db.prepare(`UPDATE leads SET call_status = ? WHERE id = ?`).run(status, lead_id);
+  // If killing a lead, cancel all their pending jobs
+  if (status === 'dead' || status === 'opted_out') {
+    cancelAllJobsForLead(lead_id);
+  }
+  console.log(`[Admin] Lead ${lead_id} status updated to ${status}`);
+  res.json({ success: true });
 });
 
-// JORDY DASHBOARD FOR SMS
-// Add this — Jordy's SMS conversations
+// ─── ROUTE: DELETE TEST LEADS ─────────────────────────────────────────────────
+app.post('/admin/delete-test-leads', (req, res) => {
+  const { secret, phone } = req.body;
+  if (secret !== process.env.MANUAL_ENTRY_SECRET) {
+    return res.status(403).json({ error: 'Unauthorized' });
+  }
+  if (phone) {
+    const lead = db.prepare(`SELECT id FROM leads WHERE lead_phone = ?`).get(phone);
+    if (lead) {
+      db.prepare(`DELETE FROM sms_messages WHERE lead_id = ?`).run(lead.id);
+      db.prepare(`DELETE FROM scheduled_jobs WHERE lead_id = ?`).run(lead.id);
+      db.prepare(`DELETE FROM leads WHERE id = ?`).run(lead.id);
+      return res.json({ success: true, deleted: phone });
+    }
+    return res.json({ success: false, message: 'Lead not found' });
+  }
+  return res.status(400).json({ error: 'Phone number required' });
+});
+
+// ─── ROUTE: DEDUPLICATE LEADS ─────────────────────────────────────────────────
+app.post('/admin/deduplicate-leads', (req, res) => {
+  const { secret } = req.body;
+  if (secret !== process.env.MANUAL_ENTRY_SECRET) {
+    return res.status(403).json({ error: 'Unauthorized' });
+  }
+  const duplicates = db.prepare(`
+    SELECT id FROM leads
+    WHERE id NOT IN (
+      SELECT MAX(id) FROM leads
+      GROUP BY shop_id, replace(replace(replace(lead_phone, '+', ''), '-', ''), ' ', '')
+    )
+  `).all();
+  let deleted = 0;
+  for (const row of duplicates) {
+    db.prepare(`DELETE FROM sms_messages WHERE lead_id = ?`).run(row.id);
+    db.prepare(`DELETE FROM scheduled_jobs WHERE lead_id = ?`).run(row.id);
+    db.prepare(`DELETE FROM leads WHERE id = ?`).run(row.id);
+    deleted++;
+  }
+  res.json({ success: true, deleted });
+});
+
+// ─── ROUTE: DELETE OUTREACH LEAD ─────────────────────────────────────────────
+app.post('/admin/delete-outreach-lead', (req, res) => {
+  const { secret, id } = req.body;
+  if (secret !== process.env.MANUAL_ENTRY_SECRET) {
+    return res.status(403).json({ error: 'Unauthorized' });
+  }
+  if (id) {
+    db.prepare('DELETE FROM outreach_leads WHERE id = ?').run(id);
+    return res.json({ success: true, deleted: id });
+  }
+  db.prepare('DELETE FROM outreach_leads').run();
+  return res.json({ success: true, deleted: 'all' });
+});
+
+// ─── ROUTE: RESET SMS ─────────────────────────────────────────────────────────
+app.post('/admin/reset-sms', (req, res) => {
+  const { secret, phone } = req.body;
+  if (secret !== process.env.MANUAL_ENTRY_SECRET) {
+    return res.status(403).json({ error: 'Unauthorized' });
+  }
+  const lead = db.prepare(`SELECT id FROM leads WHERE lead_phone = ?`).get(phone);
+  if (!lead) return res.json({ success: false, message: 'Lead not found' });
+  db.prepare(`DELETE FROM sms_messages WHERE lead_id = ?`).run(lead.id);
+  db.prepare(`DELETE FROM scheduled_jobs WHERE lead_id = ? AND status = 'pending'`).run(lead.id);
+  res.json({ success: true });
+});
+
+// ─── ROUTE: VIEW SCHEDULED JOBS (debug) ──────────────────────────────────────
+app.get('/admin/jobs', (req, res) => {
+  const { secret } = req.query;
+  if (secret !== process.env.MANUAL_ENTRY_SECRET) {
+    return res.status(403).json({ error: 'Unauthorized' });
+  }
+  const jobs = db.prepare(`
+    SELECT j.*, l.lead_name, l.lead_phone, l.call_status
+    FROM scheduled_jobs j
+    LEFT JOIN leads l ON j.lead_id = l.id
+    WHERE j.status = 'pending'
+    ORDER BY j.send_at ASC
+    LIMIT 50
+  `).all();
+  res.json({ pending_jobs: jobs.length, jobs });
+});
+
+// ─── JORDY SMS CONVERSATIONS ──────────────────────────────────────────────────
 app.get('/api/conversations/pure-vision-tints', async (req, res) => {
   const { password } = req.query;
   if (password !== 'purevision2026') return res.status(401).json({ error: 'Unauthorized' });
-  
   const leads = db.prepare('SELECT * FROM leads WHERE shop_id = ?').all('pure-vision-tints');
   const leadIds = leads.map(l => l.id);
   if (!leadIds.length) return res.json([]);
-  
   const placeholders = leadIds.map(() => '?').join(',');
   const messages = db.prepare(`
-    SELECT * FROM sms_messages 
-    WHERE lead_id IN (${placeholders}) 
-    ORDER BY created_at ASC
+    SELECT * FROM sms_messages WHERE lead_id IN (${placeholders}) ORDER BY created_at ASC
   `).all(...leadIds);
-  
   res.json(messages);
 });
 
@@ -1337,7 +1773,6 @@ app.get('/dashboard/calls', async (req, res) => {
   res.json({ calls: data.calls || [] });
 });
 
-// Proxy single call detail
 app.get('/dashboard/call/:callId', async (req, res) => {
   const resp = await fetch(`https://api.retellai.com/v2/get-call/${req.params.callId}`, {
     headers: { 'Authorization': `Bearer ${process.env.RETELL_API_KEY}` }
@@ -1347,78 +1782,46 @@ app.get('/dashboard/call/:callId', async (req, res) => {
 
 // ─── ROUTE: SHOPDESK DEMO CALL ────────────────────────────────────────────────
 app.post("/demo/call", async (req, res) => {
-  console.log("[ShopDesk Demo] Route hit — body:", JSON.stringify(req.body));
-  console.log("ShopDesk Demo")
   const { phone, name } = req.body;
-
-  if (!phone) {
-    return res.status(400).json({ error: "Phone number required" });
-  }
-
-  console.log(`[ShopDesk Demo] Calling ${name || "visitor"} at ${phone}`);
+  if (!phone) return res.status(400).json({ error: "Phone number required" });
 
   try {
     const response = await fetch("https://api.retellai.com/v2/create-phone-call", {
       method: "POST",
-      headers: {
-        "Content-Type":  "application/json",
-        "Authorization": `Bearer ${process.env.RETELL_API_KEY}`,
-      },
+      headers: { "Content-Type": "application/json", "Authorization": `Bearer ${process.env.RETELL_API_KEY}` },
       body: JSON.stringify({
         from_number: process.env.SHOPDESK_DEMO_PHONE,
         to_number:   phone,
         agent_id:    process.env.SHOPDESK_DEMO_AGENT_ID,
-        retell_llm_dynamic_variables: {
-          visitor_name: name || "there",
-        },
+        retell_llm_dynamic_variables: { visitor_name: name || "there" },
       }),
     });
-
-    if (!response.ok) {
-      const err = await response.text();
-      throw new Error(`Retell error: ${err}`);
-    }
-
+    if (!response.ok) throw new Error(await response.text());
     const data = await response.json();
-    console.log(`[ShopDesk Demo] Call triggered: ${data.call_id}`);
     res.json({ success: true, call_id: data.call_id });
-
   } catch (err) {
-    console.error(`[ShopDesk Demo] Error: ${err.message}`);
     res.status(500).json({ error: err.message });
   }
 });
 
+// ─── ROUTE: DASHBOARD DATA ────────────────────────────────────────────────────
 app.get('/dashboard/data/:shopId', async (req, res) => {
   const { password } = req.query;
   if (password !== 'purevision2026') return res.status(401).json({ error: 'Unauthorized' });
 
   try {
-    const leads = db.prepare(
-      'SELECT * FROM leads WHERE shop_id = ? ORDER BY created_at DESC'
-    ).all(req.params.shopId);
-
+    const leads = db.prepare('SELECT * FROM leads WHERE shop_id = ? ORDER BY created_at DESC').all(req.params.shopId);
     const calls = [];
-    const leadsWithCalls = leads.filter(l => l.call_id);
-    for (const lead of leadsWithCalls) {
+    for (const lead of leads.filter(l => l.call_id)) {
       try {
         const r = await fetch(`https://api.retellai.com/v2/get-call/${lead.call_id}`, {
           headers: { 'Authorization': `Bearer ${process.env.RETELL_API_KEY}` }
         });
         if (r.ok) {
           const callData = await r.json();
-          calls.push({
-            ...callData,
-            lead_name: lead.lead_name,
-            lead_phone: lead.lead_phone,
-            lead_vehicle: lead.lead_vehicle,
-            lead_special: lead.lead_special,
-            booked_at: lead.booked_at,
-          });
+          calls.push({ ...callData, lead_name: lead.lead_name, lead_phone: lead.lead_phone, lead_vehicle: lead.lead_vehicle, lead_special: lead.lead_special, booked_at: lead.booked_at });
         }
-      } catch (e) {
-        console.error(`Retell fetch failed for ${lead.call_id}:`, e.message);
-      }
+      } catch(e) { /* skip failed call fetches */ }
     }
 
     let events = [];
@@ -1428,32 +1831,23 @@ app.get('/dashboard/data/:shopId', async (req, res) => {
         key: process.env.GOOGLE_PRIVATE_KEY.replace(/\\n/g, "\n"),
         scopes: ["https://www.googleapis.com/auth/calendar.readonly"],
       });
-
       await auth.authorize();
-
       const calendar = google.calendar({ version: 'v3', auth });
       const now = new Date();
       const twoWeeks = new Date(now.getTime() + 14 * 24 * 60 * 60 * 1000);
       const calResp = await calendar.events.list({
         calendarId: process.env.GOOGLE_CALENDAR_ID,
-        timeMin: now.toISOString(),
-        timeMax: twoWeeks.toISOString(),
-        singleEvents: true,
-        orderBy: 'startTime',
+        timeMin: now.toISOString(), timeMax: twoWeeks.toISOString(),
+        singleEvents: true, orderBy: 'startTime',
       });
       events = (calResp.data.items || []).map(e => ({
-        summary: e.summary,
-        description: e.description,
-        start: e.start.dateTime || e.start.date,
-        end: e.end.dateTime || e.end.date,
+        summary: e.summary, description: e.description,
+        start: e.start.dateTime || e.start.date, end: e.end.dateTime || e.end.date,
       }));
-    } catch (e) {
-      console.error('Calendar fetch failed:', e.message);
-    }
+    } catch(e) { /* calendar optional */ }
 
     res.json({ leads, calls, events });
-  } catch (e) {
-    console.error(e);
+  } catch(e) {
     res.status(500).json({ error: 'Server error' });
   }
 });
@@ -1462,154 +1856,65 @@ app.get('/dashboard/data/:shopId', async (req, res) => {
 app.get('/api/conversations/:shopId', async (req, res) => {
   const { password } = req.query;
   if (password !== 'southwestepoxy') return res.status(401).json({ error: 'Unauthorized' });
-  
   const leads = db.prepare('SELECT * FROM leads WHERE shop_id = ?').all(req.params.shopId);
   const leadIds = leads.map(l => l.id);
-  
   if (!leadIds.length) return res.json([]);
-  
   const placeholders = leadIds.map(() => '?').join(',');
   const messages = db.prepare(`
-    SELECT * FROM sms_messages 
-    WHERE lead_id IN (${placeholders}) 
-    ORDER BY created_at ASC
+    SELECT * FROM sms_messages WHERE lead_id IN (${placeholders}) ORDER BY created_at ASC
   `).all(...leadIds);
-  
   res.json(messages);
 });
 
-// ─── ROUTE: GET EPOXY AVAILABILITY ───────────────────────────────────────────
-app.post('/tools/get-epoxy-availability', async (req, res) => {
-  const raw = req.body;
-  const args = raw.args || raw;
-  const date = args.date;
-
-  console.log('[Epoxy Availability] Checking:', date);
-
-  if (!date) {
-    return res.json({
-      response: 'We have morning and afternoon slots available. What day works for you?',
-      available_slots: ['9AM', '12PM', '3PM', '6PM']
-    });
-  }
-
-  try {
-    const checkDate = new Date(date + 'T12:00:00-05:00');
-    const dateStr = getCentralDateString(checkDate);
-    const dayStart = new Date(`${dateStr}T00:00:00-05:00`);
-    const dayEnd = new Date(`${dateStr}T23:59:59-05:00`);
-
-    const response = await gcal.events.list({
-      calendarId: process.env.EPOXY_CALENDAR_ID,
-      timeMin: dayStart.toISOString(),
-      timeMax: dayEnd.toISOString(),
-      singleEvents: true,
-      orderBy: 'startTime',
-    });
-
-    const bookedHours = (response.data.items || []).map(e => {
-      const start = new Date(e.start.dateTime || e.start.date);
-      return getCentralHour(start);
-    });
-
-    const ESTIMATE_SLOTS = [
-      { label: '9AM', hour: 9 },
-      { label: '12PM', hour: 12 },
-      { label: '3PM', hour: 15 },
-      { label: '6PM', hour: 18 },
-    ];
-
-    const available = ESTIMATE_SLOTS.filter(s => !bookedHours.includes(s.hour));
-    const friendlyDate = checkDate.toLocaleDateString('en-US', {
-      weekday: 'long', month: 'long', day: 'numeric', timeZone: 'America/Chicago'
-    });
-
-    if (!available.length) {
-      return res.json({
-        response: `We're fully booked on ${friendlyDate}. Would another day work for you?`,
-        available_slots: []
-      });
-    }
-
-    return res.json({
-      response: `We have ${available.map(s => s.label).join(', ')} available on ${friendlyDate}. Which works best for you?`,
-      available_slots: available.map(s => s.label),
-      date: dateStr,
-      friendly_date: friendlyDate
-    });
-  } catch(e) {
-    console.error('[Epoxy Availability] Error:', e.message);
-    return res.json({
-      response: 'We have 9AM, 12PM, 3PM, and 6PM available. Which works for you?',
-      available_slots: ['9AM', '12PM', '3PM', '6PM']
-    });
-  }
+// ─── ROUTE: DASHBOARD API ─────────────────────────────────────────────────────
+app.get("/api/leads/:shopId", (req, res) => {
+  const leads = db.prepare(`SELECT * FROM leads WHERE shop_id = ? ORDER BY created_at DESC`).all(req.params.shopId);
+  res.json(leads);
 });
 
-// ─── ROUTE: BOOK EPOXY ESTIMATE ───────────────────────────────────────────────
-app.post('/tools/book-estimate', async (req, res) => {
-  const raw = req.body;
-  const args = raw.args || raw;
-  const { lead_name, lead_phone, lead_address, project_type, appointment_time } = args;
-
-  console.log('[Book Estimate] Called with:', JSON.stringify(args, null, 2));
-
-  if (!appointment_time) {
-    return res.json({
-      response: "I wasn't able to lock that in. Can you confirm the day and time again?",
-      success: false
-    });
-  }
-
+// ─── OUTREACH CRM ROUTES ──────────────────────────────────────────────────────
+app.get('/leads', (req, res) => {
   try {
-    const dateTimeStr = appointment_time.includes('T')
-      ? appointment_time
-      : appointment_time.replace(' ', 'T') + ':00-05:00';
-
-    const appointmentDate = new Date(dateTimeStr);
-    const endDate = new Date(appointmentDate.getTime() + 60 * 60 * 1000);
-
-    await gcal.events.insert({
-      calendarId: process.env.EPOXY_CALENDAR_ID,
-      requestBody: {
-        summary: `Free Estimate — ${lead_name}`,
-        description: `Project: ${project_type || 'Epoxy Flooring'}\nAddress: ${lead_address || 'TBD'}\nPhone: ${lead_phone}`,
-        start: { dateTime: appointmentDate.toISOString(), timeZone: 'America/Chicago' },
-        end: { dateTime: endDate.toISOString(), timeZone: 'America/Chicago' },
-      }
-    });
-
-    db.prepare(`UPDATE leads SET booked_at = ?, call_status = 'booked', lead_vehicle = ?
-      WHERE lead_phone = ?`)
-      .run(appointment_time, lead_address || 'Address TBD', lead_phone);
-
-    const friendlyTime = appointmentDate.toLocaleString('en-US', {
-      weekday: 'long', month: 'long', day: 'numeric',
-      hour: 'numeric', minute: '2-digit', timeZone: 'America/Chicago'
-    });
-
-    console.log(`[Book Estimate] Booked for ${lead_name} at ${appointment_time}`);
-
-    return res.json({
-      response: `You're all set! Ling will come by ${lead_address} on ${friendlyTime} for your free estimate. See you then! 🙌`,
-      success: true
-    });
-  } catch(e) {
-    console.error('[Book Estimate] Error:', e.message);
-    return res.json({
-      response: `You're confirmed for ${appointment_time}. Ling will reach out to confirm the address. Looking forward to it!`,
-      success: true
-    });
-  }
+    res.json(db.prepare('SELECT * FROM outreach_leads ORDER BY added DESC').all());
+  } catch(err) { res.status(500).json({ error: err.message }); }
 });
 
-// ─── ROUTE: SHOPDESK WEBSITE CHAT ────────────────────────────────────────────
+app.post('/leads', (req, res) => {
+  try {
+    const { id, name, biz, phone, vertical, city, notes, status, touch, added } = req.body;
+    db.prepare(`
+      INSERT INTO outreach_leads (id, name, biz, phone, vertical, city, notes, status, touch, added)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(id, name, biz, phone, vertical, city, notes, status || 'new', touch || 1, added);
+    res.json({ ok: true });
+  } catch(err) { res.status(500).json({ error: err.message }); }
+});
+
+app.patch('/leads/:id', (req, res) => {
+  try {
+    const { status, touch, notes } = req.body;
+    db.prepare(`
+      UPDATE outreach_leads
+      SET status = COALESCE(?, status), touch = COALESCE(?, touch), notes = COALESCE(?, notes)
+      WHERE id = ?
+    `).run(status ?? null, touch ?? null, notes ?? null, req.params.id);
+    res.json({ ok: true });
+  } catch(err) { res.status(500).json({ error: err.message }); }
+});
+
+app.delete('/leads/:id', (req, res) => {
+  try {
+    db.prepare('DELETE FROM outreach_leads WHERE id = ?').run(req.params.id);
+    res.json({ ok: true });
+  } catch(err) { res.status(500).json({ error: err.message }); }
+});
+
+// ─── ROUTE: WEBSITE CHAT ──────────────────────────────────────────────────────
 app.post('/chat', async (req, res) => {
   const { messages } = req.body;
   if (!messages || !Array.isArray(messages)) {
     return res.status(400).json({ error: 'Messages required' });
   }
-
   try {
     const aiResp = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
@@ -1621,165 +1926,36 @@ app.post('/chat', async (req, res) => {
       body: JSON.stringify({
         model: 'claude-sonnet-4-5',
         max_tokens: 300,
-        system: `You are ShopDesk AI, a sales assistant on the ShopDesk.ai website.
-ShopDesk is a hyper-specialized AI agent built exclusively for service businesses.
-It manages lead flow, follows up automatically via SMS and calling, books appointments, and keeps pipelines moving.
-
-YOUR PERSONALITY
-Warm, confident, and knowledgeable. You're having a real conversation — not reading a script.
-Keep every reply SHORT — 2-4 sentences max. This is a website chat widget.
-
-WHAT SHOPDESK DOES
-- Instant SMS follow-up the moment a lead comes in (within 60 seconds)
-- AI manages the full conversation — qualifies, answers questions, handles objections
-- Checks real calendar and books appointments automatically
-- Automatic retry workflows if leads don't respond
-- Full pipeline dashboard so clients see every lead and conversation
-- Messaging-first approach — calling used strategically, not as a default
-
-PRICING
-- Starter: $297/month — up to 200 leads, SMS follow-up, calendar sync, 1 location
-- Growth: $497/month — up to 500 leads, SMS + calling, retry workflows, call recordings
-- Multi-location: $797/month — unlimited leads, up to 3 locations, custom workflows
-- All plans include a dedicated specialist, custom setup, and money-back guarantee
-
-INDUSTRIES WE SERVE
-Tint shops, auto detail, epoxy flooring, home services, HVAC, med spas, cleaning, lawn care, power washing — any service business with lead flow.
-
-CASE STUDIES
-- Jordy Chen, Pure Vision Tints (Hockley TX) — ShopDesk manages his full tint lead pipeline
-- Ling, Southwest Epoxy Flooring (Houston TX) — Facebook leads auto-followed up and estimate booked
-
-HOW TO CLOSE
-If they seem interested, ask what type of business they run. Tailor the pitch. End by suggesting they click "Call me now" to hear the AI live, or offer to connect them with Jake (the founder).
-
-RULES
-- Never mention Claude, Anthropic, or any underlying AI platform
-- Keep replies to 2-4 sentences — this is a chat widget not email
-- If they say they want to sign up or talk to someone, tell them Jake will reach out and ask for their name and number or email
-- Be genuinely helpful, not salesy`,
-        messages: messages
+        system: `You are ShopDesk AI, a sales assistant on the ShopDesk.ai website. ShopDesk is a hyper-specialized AI agent built exclusively for service businesses. It manages lead flow, follows up automatically via SMS and calling, books appointments, and keeps pipelines moving. Keep every reply SHORT — 2-4 sentences max. Never mention Claude, Anthropic, or any underlying AI platform. Pricing: Starter $297/month, Growth $497/month, Multi-location $797/month. All include dedicated specialist and money-back guarantee. Industries: tint, auto detail, epoxy, home services, HVAC, med spas, cleaning, power washing. If they want to sign up, ask for their name and number and tell them Jake will reach out.`,
+        messages
       })
     });
-
     const data = await aiResp.json();
-
-    if (data.type === 'error') {
-      return res.status(500).json({ error: data.error?.message });
-    }
-
-    const reply = data.content?.[0]?.text;
-    res.json({ reply });
+    if (data.type === 'error') return res.status(500).json({ error: data.error?.message });
+    res.json({ reply: data.content?.[0]?.text });
   } catch(e) {
-    console.error('[Chat] Error:', e.message);
     res.status(500).json({ error: e.message });
   }
 });
 
-// ─── ROUTE: DELETE TEST LEADS ─────────────────────────────────────────────────
-app.post('/admin/delete-outreach-lead', (req, res) => {
-  const { secret, id } = req.body;
-  if (secret !== process.env.MANUAL_ENTRY_SECRET) {
-    return res.status(403).json({ error: 'Unauthorized' });
-  }
-
-  if (id) {
-    db.prepare('DELETE FROM outreach_leads WHERE id = ?').run(id);
-    return res.json({ success: true, deleted: id });
-  }
-
-  // No id = delete ALL outreach leads
-  db.prepare('DELETE FROM outreach_leads').run();
-  return res.json({ success: true, deleted: 'all' });
-});
-
-app.post('/admin/delete-test-leads', (req, res) => {
-  const { secret, phone } = req.body;
-  if (secret !== process.env.MANUAL_ENTRY_SECRET) {
-    return res.status(403).json({ error: 'Unauthorized' });
-  }
-
-  if (phone) {
-    const lead = db.prepare(`SELECT id FROM leads WHERE lead_phone = ?`).get(phone);
-    if (lead) {
-      db.prepare(`DELETE FROM sms_messages WHERE lead_id = ?`).run(lead.id);
-      db.prepare(`DELETE FROM leads WHERE id = ?`).run(lead.id);
-      console.log(`[Admin] Deleted lead and messages for ${phone}`);
-      return res.json({ success: true, deleted: phone });
-    }
-    return res.json({ success: false, message: 'Lead not found' });
-  }
-
-  return res.status(400).json({ error: 'Phone number required' });
-});
-
-
-// ─── ROUTE: DASHBOARD API ─────────────────────────────────────────────────────
-app.get("/api/leads/:shopId", (req, res) => {
-  const { shopId } = req.params;
-  const leads = db.prepare(`
-    SELECT * FROM leads WHERE shop_id = ? ORDER BY created_at DESC
-  `).all(shopId);
-  res.json(leads);
-});
-
-// GET /leads — fetch all
-app.get('/leads', (req, res) => {
-  try {
-    const leads = db.prepare(
-      'SELECT * FROM outreach_leads ORDER BY added DESC'
-    ).all();
-    res.json(leads);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// POST /leads — add new lead
-app.post('/leads', (req, res) => {
-  try {
-    const { id, name, biz, phone, vertical, city, notes, status, touch, added } = req.body;
-    db.prepare(`
-      INSERT INTO outreach_leads (id, name, biz, phone, vertical, city, notes, status, touch, added)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(id, name, biz, phone, vertical, city, notes, status || 'new', touch || 1, added);
-    res.json({ ok: true });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// PATCH /leads/:id — update status, touch, notes
-app.patch('/leads/:id', (req, res) => {
-  try {
-    const { status, touch, notes } = req.body;
-    db.prepare(`
-      UPDATE outreach_leads
-      SET status = COALESCE(?, status),
-          touch  = COALESCE(?, touch),
-          notes  = COALESCE(?, notes)
-      WHERE id = ?
-    `).run(status ?? null, touch ?? null, notes ?? null, req.params.id);
-    res.json({ ok: true });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// DELETE /leads/:id — remove lead
-app.delete('/leads/:id', (req, res) => {
-  try {
-    db.prepare('DELETE FROM outreach_leads WHERE id = ?').run(req.params.id);
-    res.json({ ok: true });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
+// ─── ROUTE: SHOPDESK DEMO SMS CONVERSATIONS ───────────────────────────────────
+app.get('/api/conversations/shopdesk-demo', async (req, res) => {
+  const { password } = req.query;
+  if (password !== 'shopdesk2026') return res.status(401).json({ error: 'Unauthorized' });
+  const leads = db.prepare('SELECT * FROM leads WHERE shop_id = ?').all('shopdesk-demo');
+  const leadIds = leads.map(l => l.id);
+  if (!leadIds.length) return res.json([]);
+  const placeholders = leadIds.map(() => '?').join(',');
+  const messages = db.prepare(`
+    SELECT * FROM sms_messages WHERE lead_id IN (${placeholders}) ORDER BY created_at ASC
+  `).all(...leadIds);
+  res.json(messages);
 });
 
 // ─── START SERVER ─────────────────────────────────────────────────────────────
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`\nPure Vision backend running on port ${PORT}`);
-  console.log(`Webhook URL: http://localhost:${PORT}/webhook/ghl/pure-vision-tints`);
-  console.log(`Leads API:   http://localhost:${PORT}/api/leads/pure-vision-tints\n`);
+  console.log(`\nShopDesk backend running on port ${PORT}`);
+  console.log(`Webhook:  http://localhost:${PORT}/webhook/ghl/pure-vision-tints`);
+  console.log(`Worker:   Background job processor active\n`);
 });
