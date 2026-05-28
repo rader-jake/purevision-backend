@@ -1243,7 +1243,7 @@ app.post("/webhook/sms-only/:shopId", async (req, res) => {
     if (shopId === 'shopdesk-demo') {
       msg = `Hey ${lead.leadName}! Is this the owner of ${lead.leadVehicle}? 👋`;
     } else if (shopId === 'southwest-epoxy') {
-      msg = `Hey ${lead.leadName}! This is Jake from Southwest Epoxy Flooring 👋 You reached out about our Spring Special — $1,499 flat for a 2-car garage, everything included. Still interested in getting that done?`;
+      msg = `Hey ${lead.leadName}! This is Jake from Southwest Epoxy Flooring. You reached out about our Spring Special — $1,499 flat for a 2-car garage. Still interested in getting that done?`;
     } else {
       msg = `Hey ${lead.leadName}! This is Marissa with Pure Vision Tints. You reached out about tinting your ${lead.leadVehicle} — were you still interested in getting that done?`;
     }
@@ -1417,7 +1417,7 @@ app.post("/webhook/retell/call-ended", async (req, res) => {
         }
       }, 2 * 60 * 1000);
     } else if (attempts >= 2) {
-      const msg = `Hey ${lead.lead_name}! This is Marissa from Pure Vision Tints 🚗 We tried reaching you about tinting your ${lead.lead_vehicle} but couldn't connect. Still interested? Just reply here and I'll get you taken care of real quick 👍`;
+      const msg = `Hey ${lead.lead_name}! This is Marissa from Pure Vision Tints. We tried reaching you about tinting your ${lead.lead_vehicle} but couldn't connect. Were you still interested?`;
       await sendSMS(lead.lead_phone, msg);
       db.prepare(`INSERT INTO sms_messages (lead_id, direction, body) VALUES (?, ?, ?)`)
         .run(lead.id, 'outbound', msg);
