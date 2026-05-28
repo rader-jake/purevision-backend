@@ -77,14 +77,29 @@ Respond with just the prompt, nothing else.`
 // ── Step 3: Generate Image with DALL-E 3 ──────────────────────
 async function generateImage(prompt) {
   console.log('🎨 Generating image...');
-  const response = await openai.images.generate({
-    model: 'gpt-image-1',
-    prompt: `${prompt}. Style: ${BRAND.visualStyle}`,
-    n: 1,
-    size: '1024x1024',
-    quality: 'high'
+  
+  const response = await openai.responses.create({
+    model: 'gpt-4o',
+    input: `Generate an image: ${prompt}. Style: ${BRAND.visualStyle}`,
+    tools: [{ type: 'image_generation' }]
   });
-  return response.data[0].url;
+
+  // Extract base64 image from response
+  const imageData = response.output
+    .filter(block => block.type === 'image_generation_call')
+    .map(block => block.result)[0];
+
+  if (!imageData) throw new Error('No image generated in response');
+
+  // Upload base64 directly to Cloudinary
+  const uploadResult = await new Promise((resolve, reject) => {
+    cloudinary.uploader.upload_stream(
+      { folder: 'shopdesk-social', public_id: `post_${Date.now()}` },
+      (err, result) => err ? reject(err) : resolve(result)
+    ).end(Buffer.from(imageData, 'base64'));
+  });
+
+  return uploadResult.secure_url;
 }
 
 // ── Step 4: Upload to Cloudinary ──────────────────────────────
@@ -244,7 +259,7 @@ export async function runSocialPost(options = {}) {
     const tempUrl = await generateImage(imagePrompt);
 
     // 4. Upload to Cloudinary
-    const permanentUrl = await uploadImage(tempUrl, category);
+    const permanentUrl = await generateImage(imagePrompt);
     console.log(`✅ Image uploaded: ${permanentUrl}`);
 
     // 5. Generate caption
