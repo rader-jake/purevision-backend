@@ -78,7 +78,7 @@ Respond with just the prompt, nothing else.`
 async function generateImage(prompt) {
   console.log('🎨 Generating image...');
   const response = await openai.images.generate({
-    model: 'gpt-4.1-mini',
+    model: 'gpt-5.4-nano',
     prompt: `${prompt}. Style: ${BRAND.visualStyle}`,
     n: 1,
     size: '1024x1024',
