@@ -214,18 +214,20 @@ async function waitForContainer(containerId, attempts = 10) {
 export async function postToFacebook(imageUrl, fullCaption) {
   console.log('📘 Posting to Facebook...');
 
-  const res = await fetch(
+  // Step 1: Upload photo without publishing
+  const photoRes = await fetch(
     `https://graph.facebook.com/v19.0/${PAGE_ID}/photos`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       url: imageUrl,
       caption: fullCaption,
-      access_token: PAGE_TOKEN
+      access_token: PAGE_TOKEN,
+      published: true
     })
   });
 
-  const data = await res.json();
+  const data = await photoRes.json();
 
   if (data.error) {
     throw new Error(`FB post error: ${data.error.message}`);
