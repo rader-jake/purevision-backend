@@ -82,7 +82,7 @@ async function generateImage(prompt) {
     prompt: `${prompt}. Style: ${BRAND.visualStyle}`,
     n: 1,
     size: '1024x1024',
-    quality: 'hd'
+    quality: 'high'
   });
   return response.data[0].url;
 }
