@@ -79,7 +79,7 @@ async function generateImage(prompt) {
   console.log('🎨 Generating image...');
   
   const response = await openai.responses.create({
-    model: 'gpt-4o',
+    model: 'gpt-4.1',
     input: `Generate an image: ${prompt}. Style: ${BRAND.visualStyle}`,
     tools: [{ type: 'image_generation' }]
   });
