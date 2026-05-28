@@ -73,6 +73,9 @@ db.exec(`
 try {
   db.exec(`ALTER TABLE leads ADD COLUMN call_attempts INTEGER DEFAULT 0`);
 } catch(e) { /* already exists */ }
+try {
+  db.exec(`ALTER TABLE leads ADD COLUMN manual_mode INTEGER DEFAULT 0`);
+} catch(e) { /* already exists */ }
 
 // ─── SHOP CONFIG ──────────────────────────────────────────────────────────────
 const SHOP_CONFIGS = {
@@ -1317,6 +1320,13 @@ app.post('/webhook/sms/inbound',
         console.log('[SMS] No lead found for', from);
         return;
       }
+      // If manual mode is on, just store the inbound message — don't AI respond
+      if (lead.manual_mode === 1) {
+        console.log(`[SMS] Manual mode active for ${lead.lead_name} — storing inbound, skipping AI`);
+        db.prepare(`INSERT INTO sms_messages (lead_id, direction, body) VALUES (?, ?, ?)`)
+          .run(lead.id, 'inbound', content);
+        return;
+      }
 
       // Cancel non-responsive follow-ups since they replied
       db.prepare(`
@@ -1640,6 +1650,42 @@ app.post("/admin/trigger-pending", async (req, res) => {
       console.error(`[Admin] Failed to call ${lead.lead_name}:`, err.message);
     }
   }
+});
+
+// ─── ROUTE: TOGGLE MANUAL MODE ───────────────────────────────────────────────
+app.post('/admin/toggle-manual-mode', (req, res) => {
+  const { secret, lead_id, manual_mode } = req.body;
+  if (secret !== process.env.MANUAL_ENTRY_SECRET) {
+    return res.status(403).json({ error: 'Unauthorized' });
+  }
+  const lead = db.prepare(`SELECT * FROM leads WHERE id = ?`).get(lead_id);
+  if (!lead) return res.status(404).json({ error: 'Lead not found' });
+
+  db.prepare(`UPDATE leads SET manual_mode = ? WHERE id = ?`).run(manual_mode ? 1 : 0, lead_id);
+  console.log(`[Admin] Lead ${lead_id} manual_mode set to ${manual_mode}`);
+  res.json({ success: true, manual_mode: manual_mode ? 1 : 0 });
+});
+
+// ─── ROUTE: SEND MANUAL MESSAGE ───────────────────────────────────────────────
+app.post('/admin/send-message', async (req, res) => {
+  const { secret, lead_id, message } = req.body;
+  if (secret !== process.env.MANUAL_ENTRY_SECRET) {
+    return res.status(403).json({ error: 'Unauthorized' });
+  }
+  if (!message?.trim()) {
+    return res.status(400).json({ error: 'Message required' });
+  }
+  const lead = db.prepare(`SELECT * FROM leads WHERE id = ?`).get(lead_id);
+  if (!lead) return res.status(404).json({ error: 'Lead not found' });
+
+  const result = await sendSMS(lead.lead_phone, message);
+  if (result?.success !== false) {
+    db.prepare(`INSERT INTO sms_messages (lead_id, direction, body) VALUES (?, ?, ?)`)
+      .run(lead_id, 'outbound', message);
+    console.log(`[Admin] Manual message sent to ${lead.lead_name}: "${message}"`);
+    return res.json({ success: true });
+  }
+  res.status(500).json({ error: 'SMS send failed' });
 });
 
 // ─── ROUTE: UPDATE LEAD STATUS ────────────────────────────────────────────────
