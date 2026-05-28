@@ -6,7 +6,7 @@ import { google } from "googleapis";
 import cors from "cors";
 import crypto from 'node:crypto';
 import cron from "node-cron";
-import { runSocialPost } from './social-post.js';
+import { runSocialPost, postToInstagram, postToFacebook } from './social-post.js';
 
 
 dotenv.config();

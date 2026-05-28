@@ -153,7 +153,7 @@ Respond with JSON only, no markdown:
 }
 
 // ── Step 6: Post to Instagram ─────────────────────────────────
-async function postToInstagram(imageUrl, fullCaption) {
+export async function postToInstagram(imageUrl, fullCaption) {
   console.log('📸 Posting to Instagram...');
 
   // Step 6a: Create media container
@@ -211,7 +211,7 @@ async function waitForContainer(containerId, attempts = 10) {
 }
 
 // ── Step 7: Post to Facebook ───────────────────────────────────
-async function postToFacebook(imageUrl, fullCaption) {
+export async function postToFacebook(imageUrl, fullCaption) {
   console.log('📘 Posting to Facebook...');
 
   const res = await fetch(
