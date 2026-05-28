@@ -5,6 +5,9 @@ import twilio from "twilio";
 import { google } from "googleapis";
 import cors from "cors";
 import crypto from 'node:crypto';
+import cron from "node-cron";
+import { runSocialPost } from './social-post.js';
+
 
 dotenv.config();
 
@@ -1996,6 +1999,59 @@ app.get('/api/conversations/shopdesk-demo', async (req, res) => {
     SELECT * FROM sms_messages WHERE lead_id IN (${placeholders}) ORDER BY created_at ASC
   `).all(...leadIds);
   res.json(messages);
+});
+
+// INSTAGRAM AND FACEBOOK POSTING AI 
+
+// ── Daily Auto-Post at 9am Houston time ───────────────────────
+cron.schedule('0 9 * * *', async () => {
+  console.log('⏰ Daily social post cron fired');
+  try {
+    await runSocialPost({ autoPost: true });
+  } catch (err) {
+    console.error('Cron post failed:', err.message);
+  }
+}, {
+  timezone: 'America/Chicago'
+});
+ 
+// ── Manual Trigger Endpoints ──────────────────────────────────
+ 
+// POST /social/post - generate and post immediately
+app.post('/social/post', async (req, res) => {
+  try {
+    const result = await runSocialPost({ autoPost: true });
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+ 
+// POST /social/preview - generate only, don't post yet
+// Returns the image and caption for your approval
+app.post('/social/preview', async (req, res) => {
+  try {
+    const result = await runSocialPost({ autoPost: false });
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+ 
+// POST /social/approve - post pre-generated content
+// Call this after /preview to actually publish
+app.post('/social/approve', async (req, res) => {
+  const { imageUrl, caption } = req.body;
+  if (!imageUrl || !caption) {
+    return res.status(400).json({ error: 'imageUrl and caption required' });
+  }
+  try {
+    const igPostId = await postToInstagram(imageUrl, caption);
+    const fbPostId = await postToFacebook(imageUrl, caption);
+    res.json({ success: true, igPostId, fbPostId });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // ─── START SERVER ─────────────────────────────────────────────────────────────
