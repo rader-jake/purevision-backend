@@ -51,7 +51,7 @@ function selectCategory(pillars) {
 // ── Step 2: Generate Image Prompt ─────────────────────────────
 async function generateImagePrompt(category) {
   const response = await openai.chat.completions.create({
-    model: 'gpt-4o',
+    model: 'gpt-4.1',
     messages: [
       {
         role: 'system',
@@ -101,7 +101,7 @@ async function uploadImage(tempUrl, label) {
 // ── Step 5: Generate Caption ──────────────────────────────────
 async function generateCaption(category, imagePrompt) {
   const response = await openai.chat.completions.create({
-    model: 'gpt-4o',
+    model: 'gpt-4.1',
     messages: [
       {
         role: 'system',
