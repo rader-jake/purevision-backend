@@ -158,7 +158,7 @@ export async function postToInstagram(imageUrl, fullCaption) {
 
   // Step 6a: Create media container
   const containerRes = await fetch(
-    `https://graph.facebook.com/v19.0/${IG_USER_ID}/media`, {
+    `https://graph.facebook.com/v25.0/${IG_USER_ID}/media`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -179,7 +179,7 @@ export async function postToInstagram(imageUrl, fullCaption) {
 
   // Step 6b: Publish container
   const publishRes = await fetch(
-    `https://graph.facebook.com/v19.0/${IG_USER_ID}/media_publish`, {
+    `https://graph.facebook.com/v25.0/${IG_USER_ID}/media_publish`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -200,7 +200,7 @@ export async function postToInstagram(imageUrl, fullCaption) {
 async function waitForContainer(containerId, attempts = 10) {
   for (let i = 0; i < attempts; i++) {
     const res = await fetch(
-      `https://graph.facebook.com/v19.0/${containerId}?fields=status_code&access_token=${PAGE_TOKEN}`
+      `https://graph.facebook.com/v25.0/${containerId}?fields=status_code&access_token=${PAGE_TOKEN}`
     );
     const data = await res.json();
     if (data.status_code === 'FINISHED') return;
