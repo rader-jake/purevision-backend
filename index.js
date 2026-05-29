@@ -763,7 +763,7 @@ app.post("/webhook/meta", async (req, res) => {
 async function fetchMetaLead(leadgenId) {
   try {
     const response = await fetch(
-      `https://graph.facebook.com/v19.0/${leadgenId}?access_token=${process.env.META_PAGE_ACCESS_TOKEN}`
+      `https://graph.facebook.com/v25.0/${leadgenId}?access_token=${process.env.META_PAGE_ACCESS_TOKEN}`
     );
     const data = await response.json();
     if (!data.field_data) return null;
