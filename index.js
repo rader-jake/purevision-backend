@@ -439,6 +439,15 @@ const photoMap = {
   'completed_garage_3': 'https://shopdesk.ai/epoxy/completed-garage-3.jpg',
   'color_chart':        'https://shopdesk.ai/epoxy/color-chart.jpg',
   'recent_job':         'https://shopdesk.ai/epoxy/completed-garage-1.jpg',
+  // Pools
+  'classic_layout':      'https://shopdesk.ai/pools/classic-layout.jpg',
+  'cloud_layout':        'https://shopdesk.ai/pools/cloud-layout.jpg',
+  'pool_color_chart':    'https://shopdesk.ai/pools/color-chart.jpg',
+  'completed_pool':      'https://shopdesk.ai/pools/completed-pool.jpg',
+  'cool_breeze_layout':  'https://shopdesk.ai/pools/cool-breeze-layout.jpg',
+  'plunge_pool':         'https://shopdesk.ai/pools/plunge-pool.jpg',
+  'roman_layout':        'https://shopdesk.ai/pools/roman-layout.jpg',
+  'tuscany_layout':      'https://shopdesk.ai/pools/tuscany-layout.jpg',
 };
 
 // ─── FOLLOW-UP MESSAGE BUILDER ────────────────────────────────────────────────
@@ -967,6 +976,25 @@ function buildSMSSystemPrompt(lead) {
     - Cloud — freeform organic shape, very unique
     - Roman — most elegant, classic lines, timeless feel
     - Bahama — wide open design, perfect for entertaining, great tanning ledge
+
+    PHOTO STRATEGY — THIS IS KEY
+    Send photos to bring layouts to life. Use this exact format on a new line:
+    [SEND_PHOTO: tuscany_layout]
+    [SEND_PHOTO: classic_layout]
+    [SEND_PHOTO: cloud_layout]
+    [SEND_PHOTO: cool_breeze_layout]
+    [SEND_PHOTO: roman_layout]
+    [SEND_PHOTO: plunge_pool]
+    [SEND_PHOTO: completed_pool]
+    [SEND_PHOTO: pool_color_chart]
+
+    WHEN TO SEND PHOTOS:
+    - When you recommend a layout, send that layout's photo immediately
+    - When they ask about colors/tiles, send the color chart
+    - When they ask to see your work, send completed_pool
+    - When discussing the plunge pool, send plunge_pool
+    - Photos close deals — use them proactively, don't wait to be asked
+    - Never tell the customer you can't send photos — you CAN and SHOULD
     
     PLUNGE POOL
     - 22' × 13' compact pool — our most popular option for smaller yards
@@ -1357,7 +1385,9 @@ app.post("/webhook/sms-only/:shopId", async (req, res) => {
     } else if (shopId === 'southwest-epoxy') {
       msg = `Hey ${lead.leadName}! This is Jake from Southwest Epoxy Flooring. You reached out about our Spring Special — $1,499 flat for a 2-car garage. Still interested in getting that done?`;
     } else if (shopId === 'backyard-fun-pools') {
-      msg = `Hey ${lead.leadName}! 🏊 Thanks for reaching out to Backyard Fun Pools. We'd love to help you find the perfect pool for your backyard — are you thinking full-size or something more compact like our Plunge Pool?`;
+      msg = `Hey ${lead.leadName}! 🏊 Thanks for reaching out to Backyard Fun Pools — we actually just wrapped up this beauty! We'd love to help you create something like this for your backyard. Are you thinking full-size or something more compact like our Plunge Pool?`;
+      // Send completed pool photo right after the text
+      await sendSMSWithPhoto(lead.leadPhone, '', photoMap['completed_pool']);
     } else {
       msg = `Hey ${lead.leadName}! This is Marissa with Pure Vision Tints. You reached out about tinting your ${lead.leadVehicle} — were you still interested in getting that done?`;
     }
