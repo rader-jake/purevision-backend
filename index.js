@@ -440,14 +440,14 @@ const photoMap = {
   'color_chart':        'https://shopdesk.ai/epoxy/color-chart.jpg',
   'recent_job':         'https://shopdesk.ai/epoxy/completed-garage-1.jpg',
   // Pools
-  'classic_layout':      'https://shopdesk.ai/pools/classic-layout.jpg',
-  'cloud_layout':        'https://shopdesk.ai/pools/cloud-layout.jpg',
-  'pool_color_chart':    'https://shopdesk.ai/pools/color-chart.jpg',
-  'completed_pool':      'https://shopdesk.ai/pools/completed-pool.jpg',
-  'cool_breeze_layout':  'https://shopdesk.ai/pools/cool-breeze-layout.jpg',
-  'plunge_pool':         'https://shopdesk.ai/pools/plunge-pool.jpg',
-  'roman_layout':        'https://shopdesk.ai/pools/roman-layout.jpg',
-  'tuscany_layout':      'https://shopdesk.ai/pools/tuscany-layout.jpg',
+  'classic_layout':      'https://shopdesk.ai/pools/classic-layout.png',
+  'cloud_layout':        'https://shopdesk.ai/pools/cloud-layout.png',
+  'pool_color_chart':    'https://shopdesk.ai/pools/color-chart.png',
+  'completed_pool':      'https://shopdesk.ai/pools/completed-pool.png',
+  'cool_breeze_layout':  'https://shopdesk.ai/pools/cool-breeze-layout.png',
+  'plunge_pool':         'https://shopdesk.ai/pools/plunge-pool.png',
+  'roman_layout':        'https://shopdesk.ai/pools/roman-layout.png',
+  'tuscany_layout':      'https://shopdesk.ai/pools/tuscany-layout.png',
 };
 
 // ─── FOLLOW-UP MESSAGE BUILDER ────────────────────────────────────────────────
