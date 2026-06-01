@@ -712,10 +712,7 @@ app.post("/webhook/ghl/:shopId", async (req, res) => {
       db.prepare(`UPDATE leads SET call_status = 'call_failed' WHERE id = ?`).run(leadId);
     }
 
-    } else if (shopId === 'backyard-fun-pools') {
-      msg = `Hey ${lead.leadName}! 🏊 Thanks for reaching out to Backyard Fun Pools. We'd love to help you find the perfect pool for your backyard — are you thinking full-size or something more compact like our Plunge Pool?`;
-
-  } else {
+    } else {
     console.log(`[${shopId}] Calls disabled — lead stored, no action`);
   }
 });
