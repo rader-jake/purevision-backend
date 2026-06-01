@@ -1356,9 +1356,11 @@ app.post("/webhook/sms-only/:shopId", async (req, res) => {
   setTimeout(async () => {
     let msg;
     if (shopId === 'shopdesk-demo') {
-      msg = `Hey ${lead.leadName}! Is this the owner of ${lead.leadVehicle}? 👋`;
+      msg = `Hey ${lead.leadName}! Is this the owner of ${lead.leadVehicle}?`;
     } else if (shopId === 'southwest-epoxy') {
       msg = `Hey ${lead.leadName}! This is Jake from Southwest Epoxy Flooring. You reached out about our Spring Special — $1,499 flat for a 2-car garage. Still interested in getting that done?`;
+    } else if (shopId === 'backyard-fun-pools') {
+      msg = `Hey ${lead.leadName}! 🏊 Thanks for reaching out to Backyard Fun Pools. We'd love to help you find the perfect pool for your backyard — are you thinking full-size or something more compact like our Plunge Pool?`;
     } else {
       msg = `Hey ${lead.leadName}! This is Marissa with Pure Vision Tints. You reached out about tinting your ${lead.leadVehicle} — were you still interested in getting that done?`;
     }
