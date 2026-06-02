@@ -1491,30 +1491,38 @@ app.post('/webhook/sms/inbound',
       const reply = await runSMSAgent(messages, lead);
       if (!reply) return;
 
-      // Extract and send photos first
-      const photoMatches = reply.match(/\[SEND_PHOTO: (\w+)\]/g) || [];
-      for (const match of photoMatches) {
-        const key = match.match(/\[SEND_PHOTO: (\w+)\]/)[1];
-        if (photoMap[key]) {
-          await sendSMSWithPhoto(from, '', photoMap[key]);
-        }
-      }
-
-      // Send clean text reply
-      const cleanReply = reply.replace(/\[SEND_PHOTO: \w+\]/g, '').trim();
-      if (cleanReply) await sendSMS(from, cleanReply);
-
+      // Store inbound message immediately
       db.prepare(`INSERT INTO sms_messages (lead_id, direction, body) VALUES (?, ?, ?)`)
         .run(lead.id, 'inbound', content);
-      db.prepare(`INSERT INTO sms_messages (lead_id, direction, body) VALUES (?, ?, ?)`)
-        .run(lead.id, 'outbound', cleanReply);
 
-      // Schedule cold nudge — if they go quiet we'll follow up
-      if (lead.shop_id !== 'shopdesk-demo') {
-        scheduleColdNudgeJobs(lead.id, lead.shop_id);
-      }
+      // Random typing delay 8-25 seconds
+      const typingDelay = Math.floor(Math.random() * 17000) + 8000;
+      console.log(`[SMS] Replying to ${lead.lead_name} in ${Math.round(typingDelay/1000)}s`);
 
-      console.log(`[SMS] Replied to ${lead.lead_name}: "${cleanReply}"`);
+      setTimeout(async () => {
+        // Extract and send photos first
+        const photoMatches = reply.match(/\[SEND_PHOTO: (\w+)\]/g) || [];
+        for (const match of photoMatches) {
+          const key = match.match(/\[SEND_PHOTO: (\w+)\]/)[1];
+          if (photoMap[key]) {
+            await sendSMSWithPhoto(from, '', photoMap[key]);
+          }
+        }
+
+        // Send clean text reply
+        const cleanReply = reply.replace(/\[SEND_PHOTO: \w+\]/g, '').trim();
+        if (cleanReply) await sendSMS(from, cleanReply);
+
+        db.prepare(`INSERT INTO sms_messages (lead_id, direction, body) VALUES (?, ?, ?)`)
+          .run(lead.id, 'outbound', cleanReply);
+
+        // Schedule cold nudge — if they go quiet we'll follow up
+        if (lead.shop_id !== 'shopdesk-demo') {
+          scheduleColdNudgeJobs(lead.id, lead.shop_id);
+        }
+
+        console.log(`[SMS] Replied to ${lead.lead_name}: "${cleanReply}"`);
+      }, typingDelay);
 
     } catch(e) {
       console.error('[SMS Inbound] Error:', e.message);
