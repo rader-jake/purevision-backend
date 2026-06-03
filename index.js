@@ -448,6 +448,8 @@ const photoMap = {
   'plunge_pool':         'https://shopdesk.ai/pools/plunge-pool.png',
   'roman_layout':        'https://shopdesk.ai/pools/roman-layout.png',
   'tuscany_layout':      'https://shopdesk.ai/pools/tuscany-layout.png',
+  // Tints
+  'ceramic_special_video': 'https://shopdesk.ai/tints/ceramic-special.mp4',
 };
 
 // ─── FOLLOW-UP MESSAGE BUILDER ────────────────────────────────────────────────
@@ -459,7 +461,7 @@ function buildFollowUpMessage(lead, jobType, attempt) {
     // Never replied at all
     if (shopId === 'pure-vision-tints') {
       const msgs = [
-        `Hey ${name}! Marissa here from Pure Vision Tints — just checking if you're still thinking about tinting your ${lead.lead_vehicle}? We have openings this week 🙌`,
+        `Hey ${name}! Marissa here from Pure Vision Tints — just checking if you're still thinking about tinting your ${lead.lead_vehicle}? We're currently running that Ceramic Special you asked about 👇\n[SEND_PHOTO: ceramic_special_video]`,
         `Hey ${name}, last follow-up from me — if the timing isn't right no worries at all. Reach back out whenever you're ready and we'll take care of you 🙏`,
       ];
       return msgs[Math.min(attempt - 1, msgs.length - 1)];
