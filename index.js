@@ -1509,12 +1509,13 @@ app.post('/webhook/sms/inbound',
           }
         }
 
-        // Send clean text reply
+        // Send clean text reply (strip photo tags for SMS)
         const cleanReply = reply.replace(/\[SEND_PHOTO: \w+\]/g, '').trim();
         if (cleanReply) await sendSMS(from, cleanReply);
 
+        // Store original reply WITH photo tags so dashboard can render them
         db.prepare(`INSERT INTO sms_messages (lead_id, direction, body) VALUES (?, ?, ?)`)
-          .run(lead.id, 'outbound', cleanReply);
+          .run(lead.id, 'outbound', reply.trim());
 
         // Schedule cold nudge — if they go quiet we'll follow up
         if (lead.shop_id !== 'shopdesk-demo') {
