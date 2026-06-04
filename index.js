@@ -449,7 +449,7 @@ const photoMap = {
   'roman_layout':        'https://shopdesk.ai/pools/roman-layout.png',
   'tuscany_layout':      'https://shopdesk.ai/pools/tuscany-layout.png',
   // Tints
-  'ceramic_special_video': 'https://shopdesk.ai/tints/ceramic-special.mp4',
+  'ceramic_special_video': 'https://shopdesk.ai/tints/ceramic-special.gif',
 };
 
 // ─── FOLLOW-UP MESSAGE BUILDER ────────────────────────────────────────────────
