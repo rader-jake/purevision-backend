@@ -632,6 +632,7 @@ const photoMap = {
   'tuscany_layout':      'https://shopdesk.ai/pools/tuscany-layout.png',
   // Tints
   'ceramic_special_video': 'https://shopdesk.ai/tints/ceramic-special.gif',
+  'shade_levels':        'https://shopdesk.ai/tints/shade-levels.png',
 };
 
 // ─── FOLLOW-UP MESSAGE BUILDER ────────────────────────────────────────────────
@@ -1748,7 +1749,7 @@ app.post('/webhook/sms/inbound',
         console.log(`[SMS] Duplicate inbound from ${lead.lead_name} — skipping`);
         return;
       }
-      
+
       // If manual mode is on, just store the inbound message — don't AI respond
       if (lead.manual_mode === 1) {
         console.log(`[SMS] Manual mode active for ${lead.lead_name} — storing inbound, skipping AI`);
