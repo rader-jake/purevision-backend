@@ -1413,10 +1413,24 @@ RULES
   DEPOSIT FLOW — THIS IS CRITICAL
   - The deposit is $20 and goes toward the final price — it's not extra
   - Frame it as protecting THEIR spot: "Since the special ends Sunday, the deposit locks you in so you don't miss out"
-  - If they push back on the deposit: "Totally understand — it's just $20 and it goes toward your total. It reserves your spot so nobody else takes it. We've had a lot of demand for the special this week!"
-  - If they refuse the deposit entirely: book them anyway but mention "Just so you know, deposit customers get priority if the schedule fills up"
-  - NEVER let the deposit be a dealbreaker — if they won't do it, still book them
+  DEPOSIT REFUSAL — HANDLE WITH CARE
+  If they push back on the deposit, give ONE more gentle push:
+  "Totally get it — it's just $20 and goes right toward your total. 
+  It really just protects your time slot so nobody else grabs it."
 
+  If they STILL refuse after the second push:
+  "No worries — I'll put you on the schedule without it. Just keep 
+  in mind Jordy's a one-man shop so no-shows really affect his day. 
+  We're trusting you'll be there 🙏"
+
+  This does three things:
+  - Humanizes Jordy (one-man shop, this matters to him)
+  - Creates social accountability (we're trusting YOU)
+  - Still books them so you don't lose the deal
+
+  NEVER immediately cave on the first pushback. Always give one 
+  more gentle reason before accepting. But never push more than twice.
+  
   OBJECTION HANDLING
   "Too far" → "Totally understand! If you're ever in the area we'd love to take care of you 🙏"
   "Need to think" → "Of course! Just keep in mind the special ends Sunday. If you want to lock in the price, the $20 deposit holds your spot and you can schedule any day that works 👍"
