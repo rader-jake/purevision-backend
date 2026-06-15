@@ -1570,10 +1570,6 @@ async function runSMSAgent(messages, lead) {
     const { content, stop_reason } = aiData;
 
     if (stop_reason === 'tool_use') {
-      const toolUse = content.find(b => b.type === 'tool_use');
-      const toolName = toolUse.name;
-      const toolInput = toolUse.input;
-
       const endpointMap = {
         'get_availability':       'get-availability',
         'book_appointment':       'book-appointment',
@@ -1583,33 +1579,42 @@ async function runSMSAgent(messages, lead) {
         'check_deposit_status':   'check-deposit-status',
       };
 
-      let toolResult;
-      try {
-        const endpoint = endpointMap[toolName];
-        const toolResp = await fetch(
-          `https://purevision-backend-production.up.railway.app/tools/${endpoint}`,
-          {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(toolInput)
+      // Handle ALL tool_use blocks in this response (Claude can return multiple)
+      const toolUses = content.filter(b => b.type === 'tool_use');
+      const toolResults = [];
+
+      for (const toolUse of toolUses) {
+        let toolResult;
+        try {
+          const endpoint = endpointMap[toolUse.name];
+          if (!endpoint) {
+            toolResult = { error: `Unknown tool: ${toolUse.name}` };
+          } else {
+            const toolResp = await fetch(
+              `https://purevision-backend-production.up.railway.app/tools/${endpoint}`,
+              {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(toolUse.input)
+              }
+            );
+            toolResult = await toolResp.json();
           }
-        );
-        toolResult = await toolResp.json();
-      } catch(e) {
-        toolResult = { error: 'Tool call failed: ' + e.message };
+        } catch(e) {
+          toolResult = { error: 'Tool call failed: ' + e.message };
+        }
+
+        toolResults.push({
+          type: 'tool_result',
+          tool_use_id: toolUse.id,
+          content: JSON.stringify(toolResult)
+        });
       }
 
       currentMessages = [
         ...currentMessages,
         { role: 'assistant', content },
-        {
-          role: 'user',
-          content: [{
-            type: 'tool_result',
-            tool_use_id: toolUse.id,
-            content: JSON.stringify(toolResult)
-          }]
-        }
+        { role: 'user', content: toolResults }
       ];
       continue;
     }
