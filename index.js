@@ -991,6 +991,133 @@ async function fetchMetaLead(leadgenId) {
   }
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// SHOPDESK META LEAD WEBHOOK — fully isolated from /webhook/meta (pure-vision-tints)
+// Add this block anywhere below your existing /webhook/meta routes.
+// Set this as a SEPARATE callback URL in Meta's Webhooks dashboard, subscribed
+// to the leadgen field on your ShopDesk ad's Page/form — do NOT point your
+// existing Pure Vision Tints subscription at this URL.
+// ═══════════════════════════════════════════════════════════════════════════
+
+// ─── ROUTE: SHOPDESK META WEBHOOK VERIFICATION ───────────────────────────────
+app.get("/webhook/shopdesk-meta", (req, res) => {
+  const VERIFY_TOKEN = process.env.SHOPDESK_META_VERIFY_TOKEN;
+  const mode      = req.query["hub.mode"];
+  const token     = req.query["hub.verify_token"];
+  const challenge = req.query["hub.challenge"];
+  if (mode === "subscribe" && token === VERIFY_TOKEN) {
+    return res.status(200).send(challenge);
+  }
+  res.sendStatus(403);
+});
+
+// ─── ROUTE: SHOPDESK META WEBHOOK ────────────────────────────────────────────
+app.post("/webhook/shopdesk-meta", async (req, res) => {
+  res.status(200).send("EVENT_RECEIVED");
+  try {
+    const entries = req.body.entry || [];
+    for (const entry of entries) {
+      const changes = entry.changes || [];
+      for (const change of changes) {
+        if (change.field !== "leadgen") continue;
+        const leadgenId = change.value?.leadgen_id;
+        const shopdeskLeadData = await fetchShopdeskMetaLead(leadgenId);
+        if (!shopdeskLeadData) continue;
+
+        // Duplicate check, scoped only to shopdesk-demo
+        const existingShopdeskLead = db.prepare(`
+          SELECT * FROM leads
+          WHERE shop_id = 'shopdesk-demo'
+          AND replace(replace(lead_phone, '+', ''), '-', '')
+            LIKE '%' || replace(replace(?, '+', ''), '-', '') || '%'
+          ORDER BY created_at DESC LIMIT 1
+        `).get(shopdeskLeadData.phone);
+
+        if (existingShopdeskLead) {
+          console.log(`[ShopDesk Meta] Duplicate lead for ${shopdeskLeadData.phone} — skipping`);
+          continue;
+        }
+
+        const result = db.prepare(`
+          INSERT INTO leads (shop_id, lead_name, lead_phone, lead_vehicle, lead_special)
+          VALUES (?, ?, ?, ?, ?)
+        `).run(
+          "shopdesk-demo",
+          shopdeskLeadData.name             || "there",
+          shopdeskLeadData.phone             || null,
+          shopdeskLeadData.leadsPerMonth      || "your business",
+          shopdeskLeadData.biggestChallenge   || "lead follow-up"
+        );
+
+        const leadId = result.lastInsertRowid;
+        console.log(`[ShopDesk Meta] Lead stored — DB id: ${leadId}, name: ${shopdeskLeadData.name}`);
+
+        if (shopdeskLeadData.phone) {
+          const delay = Math.floor(Math.random() * 60000) + 30000;
+          console.log(`[ShopDesk Meta] Sending first SMS to ${shopdeskLeadData.name} in ${Math.round(delay / 1000)}s`);
+
+          setTimeout(async () => {
+            const msg = `Hey ${shopdeskLeadData.name}! Is this the owner of the business? 👋`;
+            const smsResult = await sendSMS(shopdeskLeadData.phone, msg);
+            if (smsResult?.success !== false) {
+              db.prepare(`INSERT INTO sms_messages (lead_id, direction, body) VALUES (?, ?, ?)`)
+                .run(leadId, 'outbound', msg);
+              console.log(`[ShopDesk Meta] First SMS sent to ${shopdeskLeadData.name}`);
+              // Intentionally no scheduleFollowUpJobs here — shopdesk-demo is excluded
+              // from the follow-up scheduler elsewhere in your code too.
+            } else {
+              console.error(`[ShopDesk Meta] SMS send failed for ${shopdeskLeadData.name}`);
+            }
+          }, delay);
+        } else {
+          console.log(`[ShopDesk Meta] No phone number on lead ${shopdeskLeadData.name} — stored, no SMS sent`);
+        }
+      }
+    }
+  } catch (err) {
+    console.error("[ShopDesk Meta] Processing error:", err.message);
+  }
+});
+
+// ─── UTILITY: FETCH SHOPDESK META LEAD ───────────────────────────────────────
+// Separate function from fetchMetaLead — different field names, different shop.
+async function fetchShopdeskMetaLead(leadgenId) {
+  try {
+    const response = await fetch(
+      `https://graph.facebook.com/v25.0/${leadgenId}?access_token=${process.env.SHOPDESK_META_PAGE_ACCESS_TOKEN}`
+    );
+    const data = await response.json();
+    if (!data.field_data) return null;
+
+    const fields = {};
+    data.field_data.forEach(field => {
+      fields[field.name.toLowerCase()] = field.values?.[0];
+    });
+
+    return {
+      name:              fields["full_name"] || fields["name"] || null,
+      phone:             normalizeShopdeskPhone(fields["phone_number"] || fields["phone"]),
+      leadsPerMonth:      fields["how_many_leads_do_you_get_per_month?"] || null,
+      biggestChallenge:   fields["what's_your_biggest_challenge_right_now?"] || null,
+      formId:            data.form_id || null,
+      adName:            data.ad_name || null,
+      campaignName:      data.campaign_name || null,
+    };
+  } catch (err) {
+    console.error("[ShopDesk Meta] Error fetching lead:", err.message);
+    return null;
+  }
+}
+
+// ─── UTILITY: NORMALIZE PHONE (SHOPDESK-SCOPED) ──────────────────────────────
+function normalizeShopdeskPhone(raw) {
+  if (!raw) return null;
+  const digits = raw.replace(/\D/g, '');
+  if (digits.length === 10) return `+1${digits}`;
+  if (digits.length === 11 && digits.startsWith('1')) return `+${digits}`;
+  return `+${digits}`;
+}
+
 // ─── SMS TOOLS ────────────────────────────────────────────────────────────────
 const smsTools = [
   {
