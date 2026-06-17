@@ -373,23 +373,22 @@ app.post("/webhooks/square", async (req, res) => {
 
     console.log(`[Square Webhook] Payment COMPLETED for order: ${orderId}`);
 
-    // Match by order_id first (most reliable)
-    let lead = null;
-    if (orderId) {
-      lead = db.prepare(`SELECT * FROM leads WHERE square_order_id = ?`).get(orderId);
+    // Only match by order_id — no fallback (fallback caused false confirmations)
+    if (!orderId) {
+      console.log("[Square Webhook] No order_id in payment — skipping");
+      return res.status(200).json({ ok: true });
     }
 
-    // Fallback: most recent lead with deposit sent but not paid
-    if (!lead) {
-      lead = db.prepare(`
-        SELECT * FROM leads
-        WHERE deposit_sent = 1 AND deposit_paid = 0
-        ORDER BY created_at DESC LIMIT 1
-      `).get();
-    }
+    const lead = db.prepare(`SELECT * FROM leads WHERE square_order_id = ?`).get(orderId);
 
     if (!lead) {
-      console.warn("[Square Webhook] No matching lead found");
+      console.warn("[Square Webhook] No matching lead for order:", orderId);
+      return res.status(200).json({ ok: true });
+    }
+
+    // Dedup — skip if already confirmed (Square sends retries)
+    if (lead.deposit_paid === 1) {
+      console.log(`[Square Webhook] Already confirmed for lead ${lead.id} — skipping retry`);
       return res.status(200).json({ ok: true });
     }
 
@@ -1806,6 +1805,18 @@ app.post('/webhook/sms/inbound',
       console.log(`[SMS] Replying to ${lead.lead_name} in ${Math.round(typingDelay/1000)}s`);
 
       setTimeout(async () => {
+        // Outbound dedup — skip if we already replied recently
+        const recentReply = db.prepare(`
+          SELECT id FROM sms_messages
+          WHERE lead_id = ? AND direction = 'outbound'
+          AND created_at > datetime('now', '-30 seconds')
+          LIMIT 1
+        `).get(lead.id);
+
+        if (recentReply) {
+          console.log(`[SMS] Already replied to ${lead.lead_name} in last 30s — skipping duplicate`);
+          return;
+        }
         // Extract and send photos first
         const photoMatches = reply.match(/\[SEND_PHOTO: (\w+)\]/g) || [];
         for (const match of photoMatches) {
