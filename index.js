@@ -1961,9 +1961,15 @@ app.post('/webhook/sms/inbound',
         db.prepare(`INSERT INTO sms_messages (lead_id, direction, body) VALUES (?, ?, ?)`)
           .run(lead.id, 'outbound', reply.trim());
 
-        // Schedule cold nudge — if they go quiet we'll follow up
+        // Schedule cold nudge — but only if lead isn't already booked/confirmed
         if (lead.shop_id !== 'shopdesk-demo') {
-          scheduleColdNudgeJobs(lead.id, lead.shop_id);
+          const freshLead = db.prepare(`SELECT call_status FROM leads WHERE id = ?`).get(lead.id);
+          const skipStatuses = ['booked', 'confirmed', 'dead', 'opted_out', 'mia'];
+          if (!skipStatuses.includes(freshLead?.call_status)) {
+            scheduleColdNudgeJobs(lead.id, lead.shop_id);
+          } else {
+            console.log(`[SMS] Skipping cold nudge for ${lead.lead_name} — status is ${freshLead.call_status}`);
+          }
         }
 
         console.log(`[SMS] Replied to ${lead.lead_name}: "${cleanReply}"`);
