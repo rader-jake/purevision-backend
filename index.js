@@ -1014,6 +1014,7 @@ app.get("/webhook/shopdesk-meta", (req, res) => {
 // ─── ROUTE: SHOPDESK META WEBHOOK ────────────────────────────────────────────
 app.post("/webhook/shopdesk-meta", async (req, res) => {
   res.status(200).send("EVENT_RECEIVED");
+  console.log("[ShopDesk Meta] Webhook received:", JSON.stringify(req.body)); // <-- add this
   try {
     const entries = req.body.entry || [];
     for (const entry of entries) {
