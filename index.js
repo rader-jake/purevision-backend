@@ -1088,6 +1088,7 @@ async function fetchShopdeskMetaLead(leadgenId) {
       `https://graph.facebook.com/v25.0/${leadgenId}?access_token=${process.env.SHOPDESK_META_PAGE_ACCESS_TOKEN}`
     );
     const data = await response.json();
+    console.log('[ShopDesk Meta] Graph API response:', JSON.stringify(data)); // ADD THIS
     if (!data.field_data) return null;
 
     const fields = {};
