@@ -1101,7 +1101,7 @@ app.post("/webhook/shopdesk-meta", async (req, res) => {
 async function fetchShopdeskMetaLead(leadgenId) {
   try {
     const response = await fetch(
-      `https://graph.facebook.com/v25.0/${leadgenId}?access_token=${process.env.SHOPDESK_META_PAGE_ACCESS_TOKEN}`
+      `https://graph.facebook.com/v25.0/${leadgenId}?fields=field_data,form_id,ad_id,ad_name,campaign_id,campaign_name,created_time&access_token=${process.env.SHOPDESK_META_PAGE_ACCESS_TOKEN}`
     );
     const data = await response.json();
     if (!data.field_data) return null;
