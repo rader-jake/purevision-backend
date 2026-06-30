@@ -1056,7 +1056,7 @@ app.post("/webhook/shopdesk-meta", async (req, res) => {
 
         const result = db.prepare(`
           INSERT INTO leads (shop_id, lead_name, lead_phone, lead_vehicle, lead_special)
-          VALUES (?, ?, ?, ?, ?)
+          VALUES (?, ?, ?, ?, ?, ?)
         `).run(
           "shopdesk-demo",
           shopdeskLeadData.name             || "there",
