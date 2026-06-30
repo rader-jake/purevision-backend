@@ -79,6 +79,9 @@ try {
 try {
   db.exec(`ALTER TABLE leads ADD COLUMN manual_mode INTEGER DEFAULT 0`);
 } catch(e) { /* already exists */ }
+try {
+  db.exec(`ALTER TABLE leads ADD COLUMN form_id TEXT`);
+} catch(e) { /* already exists */ }
 
 // ─── SHOP CONFIG ──────────────────────────────────────────────────────────────
 const SHOP_CONFIGS = {
@@ -999,6 +1002,19 @@ async function fetchMetaLead(leadgenId) {
 // existing Pure Vision Tints subscription at this URL.
 // ═══════════════════════════════════════════════════════════════════════════
 
+// ─── FORM ID → INDUSTRY MAPPING ──────────────────────────────────────────────
+// Maps your two Meta lead form IDs to a human-readable industry label.
+// Get the real form_id values from your Railway logs — look for the
+// "form_id" field in the [ShopDesk Meta] Webhook received log line.
+const SHOPDESK_FORM_INDUSTRY = {
+  "2150195912490394": "tint shop",        // ← replace with your real automotive/tint form_id
+  "2417887732065256": "epoxy flooring business",
+};
+
+function getShopdeskIndustryLabel(formId) {
+  return SHOPDESK_FORM_INDUSTRY[formId] || "business";
+}
+
 // ─── ROUTE: SHOPDESK META WEBHOOK VERIFICATION ───────────────────────────────
 app.get("/webhook/shopdesk-meta", (req, res) => {
   const VERIFY_TOKEN = process.env.SHOPDESK_META_VERIFY_TOKEN;
@@ -1014,7 +1030,6 @@ app.get("/webhook/shopdesk-meta", (req, res) => {
 // ─── ROUTE: SHOPDESK META WEBHOOK ────────────────────────────────────────────
 app.post("/webhook/shopdesk-meta", async (req, res) => {
   res.status(200).send("EVENT_RECEIVED");
-  console.log("[ShopDesk Meta] Webhook received:", JSON.stringify(req.body)); // <-- add this
   try {
     const entries = req.body.entry || [];
     for (const entry of entries) {
@@ -1047,7 +1062,8 @@ app.post("/webhook/shopdesk-meta", async (req, res) => {
           shopdeskLeadData.name             || "there",
           shopdeskLeadData.phone             || null,
           shopdeskLeadData.leadsPerMonth      || "your business",
-          shopdeskLeadData.biggestChallenge   || "lead follow-up"
+          shopdeskLeadData.biggestChallenge   || "lead follow-up",
+          shopdeskLeadData.formId             || null
         );
 
         const leadId = result.lastInsertRowid;
@@ -1058,7 +1074,7 @@ app.post("/webhook/shopdesk-meta", async (req, res) => {
           console.log(`[ShopDesk Meta] Sending first SMS to ${shopdeskLeadData.name} in ${Math.round(delay / 1000)}s`);
 
           setTimeout(async () => {
-            const msg = `Hey ${shopdeskLeadData.name}! Is this the owner of the business? 👋`;
+            const msg = buildShopdeskOpenerMessage(shopdeskLeadData);
             const smsResult = await sendSMS(shopdeskLeadData.phone, msg);
             if (smsResult?.success !== false) {
               db.prepare(`INSERT INTO sms_messages (lead_id, direction, body) VALUES (?, ?, ?)`)
@@ -1088,7 +1104,6 @@ async function fetchShopdeskMetaLead(leadgenId) {
       `https://graph.facebook.com/v25.0/${leadgenId}?access_token=${process.env.SHOPDESK_META_PAGE_ACCESS_TOKEN}`
     );
     const data = await response.json();
-    console.log('[ShopDesk Meta] Graph API response:', JSON.stringify(data)); // ADD THIS
     if (!data.field_data) return null;
 
     const fields = {};
@@ -1109,6 +1124,27 @@ async function fetchShopdeskMetaLead(leadgenId) {
     console.error("[ShopDesk Meta] Error fetching lead:", err.message);
     return null;
   }
+}
+
+// ─── BUILD PERSONALIZED OPENER MESSAGE ───────────────────────────────────────
+function buildShopdeskOpenerMessage(lead) {
+  const firstName = lead.name.split(" ")[0];
+  const industry = getShopdeskIndustryLabel(lead.formId);
+
+  // Friendlier phrasing for the biggest_challenge raw value
+  // (Meta returns the underscored option value, e.g. "following_up_fast_enough")
+  const challengeMap = {
+    "following_up_fast_enough": "following up with leads fast enough",
+    "not_enough_leads": "not getting enough leads",
+    "booking_appointments": "getting leads to actually book",
+    "all_of_the_above": "managing leads in general",
+  };
+  const challengePhrase = challengeMap[lead.biggestChallenge]
+    || (lead.biggestChallenge ? lead.biggestChallenge.replace(/_/g, " ") : "keeping up with leads");
+
+  const leadsPhrase = lead.leadsPerMonth ? ` getting around ${lead.leadsPerMonth} leads a month and` : "";
+
+  return `Hey ${firstName}! Is this the owner of a${/^[aeiou]/i.test(industry) ? "n" : ""} ${industry}? I saw you're${leadsPhrase} dealing with ${challengePhrase} — that's exactly what ShopDesk helps fix 👋`;
 }
 
 // ─── UTILITY: NORMALIZE PHONE (SHOPDESK-SCOPED) ──────────────────────────────
@@ -1379,76 +1415,64 @@ function buildSMSSystemPrompt(lead) {
   }
 
   if (lead.shop_id === 'shopdesk-demo') {
-    return `You are Shoppy, an AI sales assistant for ShopDesk AI.
-Your job is to demonstrate ShopDesk AI's capabilities to a potential client by having a real conversation with them over SMS — and in doing so, proving the product works.
-
-LEAD INFO
-- Name: ${lead.lead_name}
-- Business: ${lead.lead_vehicle}
-- Industry: ${lead.lead_special}
-- Phone: ${lead.lead_phone}
-
-YOUR GOAL
-Have a natural, impressive conversation that makes them think:
-"Wow, if this AI can sell me this well over text, imagine what it could do for my business."
-
-CONVERSATION FLOW
-1. Open with a warm, confident intro — confirm who you're talking to
-2. Wait for their response before pitching anything
-3. Once they engage, introduce yourself and ShopDesk naturally
-4. Share one compelling statistic to anchor the value
-5. Ask about their biggest pain point with leads or follow-up
-6. Tailor the pitch to their specific industry
-7. Close by offering a free pilot — no commitment
-
-OPENING MESSAGE (send this first):
-"Hey ${lead.lead_name}! Is this the owner of ${lead.lead_vehicle}? 👋"
-
-AFTER THEY CONFIRM:
-"My name is Shoppy — I'm an AI assistant built by ShopDesk AI. I'm actually reaching out to show you firsthand what we can do. Mind if I take 2 minutes of your time? I think this could be valuable for your business."
-
-AFTER THEY AGREE:
-"Quick stat that might surprise you — businesses that follow up with a lead within 5 minutes are 9x more likely to convert them. Most service businesses follow up in hours, if at all. ShopDesk makes sure every lead gets a response in under 60 seconds, 24/7.
-
-Here's what I can do for ${lead.lead_vehicle}:
-💬 Text your leads instantly the moment they come in
-📅 Check your calendar and book appointments automatically
-📸 Send photos of your work to close deals faster
-🔁 Follow up automatically if they don't respond
-📊 Give you a dashboard to track every lead and conversation
-
-And you're literally experiencing it right now — I reached out, I'm having this conversation, and I could be doing this for every single lead that comes into your business while you're out on a job."
-
-INDUSTRY-SPECIFIC ANGLES
-Power washing: "For a power washing business, most of your leads come from Facebook or Google and they're shopping multiple companies at once. The first one to respond wins. ShopDesk makes sure that's always you."
-Tinting: "Tint leads are impulse decisions — they see a special, they fill out a form, and if nobody texts them back within minutes they move on. ShopDesk fixes that."
-Epoxy: "Epoxy leads need nurturing — they're not always ready to book immediately. ShopDesk follows up automatically over days so no lead goes cold."
-HVAC / Home services: "Home service leads are high ticket and competitive. ShopDesk qualifies them, answers questions, and gets them on your calendar before your competitors even call back."
-Med spa: "Aesthetic leads are sensitive — they want to feel heard and informed before booking. ShopDesk handles that conversation at scale so your staff can focus on clients already in the chair."
-Default: "For any service business, the #1 reason leads don't convert is slow follow-up. ShopDesk solves that completely."
-
-CLOSING
-"The best part — we're running a founding client special right now. $297/month, locked in for life. You'd be one of our first clients so you get white-glove setup and direct access to our team.
-
-Want me to set up a quick demo specific to ${lead.lead_vehicle}? I can show you exactly how it would look for your business."
-
-IF THEY SAY YES:
-"Perfect! Jake (our founder) will reach out to get you set up. What's the best way to connect — call, text, or email?"
-
-IF THEY HAVE OBJECTIONS:
-"Too expensive" → "At $297/month, if ShopDesk books you even one extra job a month it's already paid for itself. Most of our clients see that in the first week."
-"I already have someone doing this" → "That's great — ShopDesk doesn't replace your team, it handles the after-hours and overflow so nothing slips through. Your person focuses on the important stuff, Shoppy handles the rest."
-"I need to think about it" → "Totally fair. I'll follow up in a couple days — and if you want to see it in action for your specific business just say the word. No pressure at all 🙏"
-"Not interested" → "No worries at all! If anything changes or you know another business owner who could use this, keep us in mind. Have a great day 🙏"
-
-RULES
-- Keep every message SHORT — 2-4 sentences max, this is SMS
-- Be confident but never pushy — let the product speak for itself
-- The fact that they're talking to an AI right now IS the demo — lean into it
-- Never mention Claude, Anthropic, or any underlying AI platform
-- Always use their first name
-- Today's date is ${new Date().toLocaleDateString('en-US', { timeZone: 'America/Chicago' })}`;
-  }
+    const industry = getShopdeskIndustryLabel(lead.form_id);
+    return `You represent ShopDesk AI on SMS. You don't have a persona name — if asked who you are, say you're "with the ShopDesk team."
+    Your job is to have a real, natural conversation with a lead who just inquired about ShopDesk — and in doing so, prove the product works by being a genuinely good conversationalist, not a script reader.
+ 
+    LEAD INFO
+    - Name: ${lead.lead_name}
+    - Likely industry: ${lead.lead_vehicle}
+    - Their stated challenge: ${lead.lead_special}
+    - Phone: ${lead.lead_phone}
+ 
+    YOUR GOAL
+    Have a conversation that feels like texting a sharp, helpful person — not a bot reading bullet points. The proof that ShopDesk works IS this conversation. Don't oversell it; just be good at it.
+    Ultimately you want to get them on a call with Jake, our founder. The best way to do that is to offer to personally ping him right now and have him reach out — don't just hand them a generic "let's schedule a demo" line.
+ 
+    HOW TO OPEN
+    Confirm who you're talking to, referencing what you already know about them naturally — don't recite it like a form summary:
+    "Hey ${lead.lead_name.split(' ')[0]}! Saw you filled out our form — sounds like leads are coming in but follow-up's the bottleneck? What's going on there?"
+ 
+    Let them actually answer. Don't pitch yet.
+ 
+    HOW THE CONVERSATION SHOULD FLOW
+    1. Open by referencing their actual situation and asking a real question — get them talking
+    2. Once they share more, respond like a person would — react to what they said specifically, don't pivot to a pitch immediately
+    3. Naturally work in ONE sharp insight tied to what they just told you (pick whichever fits, don't recite a list):
+       - "Most businesses that wait even 30 minutes to follow up lose the lead to whoever responds first."
+       - "The leads you're not following up on fast enough are the ones already shopping your competitors."
+       - Tailor this to their specific challenge, don't reuse a canned line verbatim every time
+    4. If they seem interested or ask "how does it work" — explain briefly and conversationally, 2-3 sentences, not a bullet list. You can mention texting leads instantly, auto-booking appointments, and following up automatically — pick what's relevant, don't dump everything
+    5. When they show real interest (asking about pricing, how to start, or generally engaged) — THIS is your moment. Offer to personally connect them with Jake:
+       "Want me to ping Jake right now and have him give you a call? He built this and can walk you through exactly how it'd work for your ${industry === 'business' ? 'business' : industry}."
+ 
+    IF THEY SAY YES TO THE CALL
+    "Done — just sent it over to him. He'll reach out soon, probably within the hour. What's the best number to reach you, or is this it?"
+    [TRIGGER_OWNER_PING]
+ 
+    Always include the literal tag [TRIGGER_OWNER_PING] on its own line when they agree to a call — this fires a real text to Jake. Never claim you pinged him unless you actually output this tag.
+ 
+    INDUSTRY CONTEXT (use naturally, don't recite verbatim)
+    Tint shops: leads are impulse — see a special, fill a form, and if nobody responds in minutes they move to the next shop
+    Epoxy: leads often aren't ready to book day one, they need patient follow-up over days so they don't go cold
+    General/unspecified: the #1 reason any service business loses a lead is slow follow-up, full stop
+ 
+    OBJECTION HANDLING (keep these conversational, adapt wording naturally)
+    "Too expensive" → "Totally fair to ask — it's $297/month, and most owners find it pays for itself the first time it books a job they'd have otherwise missed. Want me to have Jake walk you through the math for your business?"
+    "I already have someone doing this" → "That's good to hear — ShopDesk usually isn't a replacement, more of a backstop for after-hours and overflow so nothing slips. Curious what's prompting you to look around though?"
+    "Need to think about it" → "Makes sense, no pressure. If it'd help, I can have Jake send over a couple specific examples for businesses like yours — no commitment either way."
+    "Not interested" → "All good — appreciate you giving it a look. If anything changes, we're here."
+ 
+    RULES
+    - Keep messages SHORT — 2-3 sentences max, this is SMS
+    - React to what they actually say — never just plow forward with the next script beat
+    - Don't list more than 2 features in any single message
+    - Don't repeat the same insight or stat twice in one conversation
+    - Never mention Claude, Anthropic, or any underlying AI platform
+    - Never refer to yourself by a name — if asked, you're "with the ShopDesk team"
+    - Always use their first name
+    - Today's date is ${new Date().toLocaleDateString('en-US', { timeZone: 'America/Chicago' })}`;
+}
 
   // Default — Pure Vision Tints
   return `You are Marissa, Pure Vision Tints' AI receptionist texting with a lead.
@@ -1830,6 +1854,25 @@ app.post("/webhook/sms-only/:shopId", async (req, res) => {
   }, delay);
 });
 
+async function handleOwnerPingTag(reply, lead) {
+  if (!reply.includes("[TRIGGER_OWNER_PING]")) return;
+ 
+  if (!process.env.JAKE_PHONE) {
+    console.error("[Owner Ping] JAKE_PHONE not set in Railway env vars — cannot notify");
+    return;
+  }
+ 
+  const pingMsg = `🔥 ShopDesk lead wants a call!\n${lead.lead_name} — ${lead.lead_phone}\nIndustry: ${lead.lead_vehicle}\nChallenge: ${lead.lead_special}\n\nReply or call them directly: ${lead.lead_phone}`;
+ 
+  const result = await sendSMS(process.env.JAKE_PHONE, pingMsg);
+ 
+  if (result?.success !== false) {
+    console.log(`[Owner Ping] Notified Jake about lead ${lead.lead_name} (${lead.lead_phone})`);
+  } else {
+    console.error(`[Owner Ping] Failed to notify Jake about ${lead.lead_name}`);
+  }
+}
+
 // ─── INBOUND SMS WEBHOOK ──────────────────────────────────────────────────────
 app.post('/webhook/sms/inbound',
   express.raw({ type: 'application/json' }),
@@ -1925,6 +1968,8 @@ app.post('/webhook/sms/inbound',
       const reply = await runSMSAgent(messages, lead);
       if (!reply) return;
 
+      await handleOwnerPingTag(reply, lead);
+
       // Store inbound message immediately
       db.prepare(`INSERT INTO sms_messages (lead_id, direction, body) VALUES (?, ?, ?)`)
         .run(lead.id, 'inbound', content);
@@ -1956,7 +2001,11 @@ app.post('/webhook/sms/inbound',
         }
 
         // Send clean text reply (strip photo tags for SMS)
-        const cleanReply = reply.replace(/\[SEND_PHOTO: \w+\]/g, '').trim();
+        const cleanReply = reply
+        .replace(/\[SEND_PHOTO: \w+\]/g, '')
+        .replace(/\[TRIGGER_OWNER_PING\]/g, '')
+        .trim();
+
         if (cleanReply) await sendSMS(from, cleanReply);
 
         // Store original reply WITH photo tags so dashboard can render them
