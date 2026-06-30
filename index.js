@@ -1129,7 +1129,7 @@ async function fetchShopdeskMetaLead(leadgenId) {
 // ─── BUILD PERSONALIZED OPENER MESSAGE ───────────────────────────────────────
 function buildShopdeskOpenerMessage(lead) {
   const firstName = lead.name.split(" ")[0];
-  const industry = getShopdeskIndustryLabel(lead.formId);
+  const industry = getShopdeskIndustryLabel(lead.form_id);
 
   // Friendlier phrasing for the biggest_challenge raw value
   // (Meta returns the underscored option value, e.g. "following_up_fast_enough")
