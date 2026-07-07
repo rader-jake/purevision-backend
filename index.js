@@ -685,9 +685,7 @@ function buildFollowUpMessage(lead, jobType, attempt) {
       ];
       return msgs[Math.min(attempt - 1, msgs.length - 1)];
     }
-    } else if (shopId === 'apex-window-tinting') {
-      msg = `Hey ${lead.leadName}! Thanks for reaching out to Apex Window Tinting. You inquired about our ${lead.leadSpecial || 'Summer Special'} for your ${lead.leadVehicle || 'vehicle'} — were you still interested in getting that done?`;
-  }
+    } 
 
   return `Hey ${name}! Just checking back in — still interested? Happy to help whenever you're ready 🙏`;
 }
@@ -1898,7 +1896,10 @@ app.post("/webhook/sms-only/:shopId", async (req, res) => {
       msg = `Hey ${lead.leadName}! 🏊 Thanks for reaching out to Backyard Fun Pools — we actually just wrapped up this beauty! We'd love to help you create something like this for your backyard. Are you thinking full-size or something more compact like our Plunge Pool?`;
       // Send completed pool photo right after the text
       await sendSMSWithPhoto(lead.leadPhone, '', photoMap['completed_pool']);
-    } else {
+    } else if (shopId === 'apex-window-tinting') {
+      msg = `Hey ${lead.leadName}! Thanks for reaching out to Apex Window Tinting. You inquired about our ${lead.leadSpecial || 'Summer Special'} for your ${lead.leadVehicle || 'vehicle'} — were you still interested in getting that done?`;
+    }
+    else {
       msg = `Hey ${lead.leadName}! This is Marissa with Pure Vision Tints. You reached out about tinting your ${lead.leadVehicle} — were you still interested in getting that done?`;
     }
 
