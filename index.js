@@ -2641,6 +2641,90 @@ app.post('/admin/toggle-manual-mode', (req, res) => {
   res.json({ success: true, manual_mode: manual_mode ? 1 : 0 });
 });
 
+
+
+// CALENDAR INTEGRATION FOR JORDY vvv
+
+// ─── ROUTE: BLOCK CALENDAR SLOT ──────────────────────────────────────────────
+app.post('/admin/block-slot', async (req, res) => {
+  const { secret, date, hour } = req.body;
+  if (secret !== process.env.MANUAL_ENTRY_SECRET) return res.status(403).json({ error: 'Unauthorized' });
+
+  try {
+    const startDate = new Date(`${date}T${String(hour).padStart(2,'0')}:00:00-05:00`);
+    const endDate = new Date(startDate.getTime() + 2 * 60 * 60 * 1000);
+
+    const event = await gcal.events.insert({
+      calendarId: process.env.GOOGLE_CALENDAR_ID,
+      requestBody: {
+        summary: '🚫 Blocked — Personal',
+        description: 'Manually blocked by Jordy via dashboard',
+        start: { dateTime: startDate.toISOString(), timeZone: 'America/Chicago' },
+        end:   { dateTime: endDate.toISOString(),   timeZone: 'America/Chicago' },
+      }
+    });
+
+    console.log(`[Calendar] Slot blocked: ${date} ${hour}:00`);
+    res.json({ success: true, eventId: event.data.id });
+  } catch(e) {
+    console.error('[Block Slot] Error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ─── ROUTE: UNBLOCK CALENDAR SLOT ────────────────────────────────────────────
+app.post('/admin/unblock-slot', async (req, res) => {
+  const { secret, eventId } = req.body;
+  if (secret !== process.env.MANUAL_ENTRY_SECRET) return res.status(403).json({ error: 'Unauthorized' });
+
+  try {
+    await gcal.events.delete({
+      calendarId: process.env.GOOGLE_CALENDAR_ID,
+      eventId: eventId,
+    });
+    console.log(`[Calendar] Slot unblocked: ${eventId}`);
+    res.json({ success: true });
+  } catch(e) {
+    console.error('[Unblock Slot] Error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ─── ROUTE: GET WEEK CALENDAR ────────────────────────────────────────────────
+app.get('/admin/calendar-week', async (req, res) => {
+  const { secret, start } = req.query;
+  if (secret !== process.env.MANUAL_ENTRY_SECRET) return res.status(403).json({ error: 'Unauthorized' });
+
+  try {
+    const startDate = new Date(start + 'T00:00:00-05:00');
+    const endDate = new Date(startDate.getTime() + 7 * 24 * 60 * 60 * 1000);
+
+    const response = await gcal.events.list({
+      calendarId: process.env.GOOGLE_CALENDAR_ID,
+      timeMin: startDate.toISOString(),
+      timeMax: endDate.toISOString(),
+      singleEvents: true,
+      orderBy: 'startTime',
+    });
+
+    const events = (response.data.items || []).map(e => ({
+      id: e.id,
+      summary: e.summary || '',
+      start: e.start.dateTime || e.start.date,
+      hour: getCentralHour(new Date(e.start.dateTime || e.start.date)),
+      date: getCentralDateString(new Date(e.start.dateTime || e.start.date)),
+      isBlocked: (e.summary || '').includes('Blocked'),
+    }));
+
+    res.json({ events });
+  } catch(e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+
+// CALENDAR INTEGRATION FOR JORDY ^^^
+
 // ─── ROUTE: SEND MANUAL MESSAGE ───────────────────────────────────────────────
 app.post('/admin/send-message', async (req, res) => {
   const { secret, lead_id, message } = req.body;
