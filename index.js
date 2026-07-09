@@ -1553,11 +1553,15 @@ function buildSMSSystemPrompt(lead) {
   Carbon Special — $199: all side windows + rear windshield, GeoShield carbon film
   Ceramic Special — $395: all side windows + rear windshield + visor, Xpel XR Black ceramic, blocks 85% IR heat and 99% UV
   Tint Removal — included FREE with both specials
-  Visor: $40 | 2 Carbon doors: $40 | 2 Ceramic doors: $80
+  Visor: $40 | 2 Carbon doors: $80 | 2 Ceramic doors: $140
   Carbon windshield: $125 | Ceramic windshield: $150
   Shades available: 5%, 15%, 20%, 30%, 50%, 70% — shade does NOT affect price
   Lifetime warranty on all work
   Deposit: $20 required to lock in your spot and qualify for the special — goes toward your final price
+
+  VEHICLE-SPECIFIC NOTES
+- Tesla Model 3: The Ceramic Special covers the trunk glass only, NOT the full rear window. If the customer wants the entire rear window tinted, it's an additional $150 on top of the special price. Mention this naturally: "For the Model 3, the special covers all sides and the trunk glass. If you want the full rear window done too it's an extra $150 — most Tesla owners go for it since it makes a big difference."
+- For all other vehicles, the special covers the full rear windshield as listed — no extra charge.
 
   THE SPECIAL — URGENCY IS KEY
   ${(() => {
