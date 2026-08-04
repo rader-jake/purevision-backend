@@ -1673,7 +1673,19 @@ function buildSMSSystemPrompt(lead) {
   - You CAN send photos — always use [SEND_PHOTO: key] tags
   - If they say STOP or not interested → "No problem! Feel free to reach out anytime 🙏" then stop
   - Keep every reply to 1-3 sentences — this is SMS not email
-  - Today's date is ${new Date().toLocaleDateString('en-US', { timeZone: 'America/Chicago' })}`;
+  - Today is ${new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric', timeZone: 'America/Chicago' })}
+  - This week's dates: ${(() => {
+    const days = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+    const now = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Chicago' }));
+    const result = [];
+    for (let i = 0; i < 10; i++) {
+      const d = new Date(now);
+      d.setDate(d.getDate() + i);
+      result.push(days[d.getDay()] + ' = ' + d.toLocaleDateString('en-CA'));
+    }
+    return result.join(', ');
+  })()}
+  - ALWAYS use the date mapping above when a customer says a day name — never guess dates`;
 }
 
 // ─── SMS TOOL ─────────────────────────────────────────────────────────────────
