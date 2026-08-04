@@ -1555,6 +1555,7 @@ function buildSMSSystemPrompt(lead) {
   Tint Removal — included FREE with both specials
   Visor: $40 | 2 Carbon doors: $80 | 2 Ceramic doors: $140
   Carbon windshield: $125 | Ceramic windshield: $150
+  Sunroof — single panel: $80 | dual sunroof: $160 (NOT included in any special — always an add-on)
   Shades available: 5%, 15%, 20%, 30%, 50%, 70% — shade does NOT affect price
   Lifetime warranty on all work
   Deposit: $20 required to lock in your spot and qualify for the special — goes toward your final price
@@ -1671,6 +1672,10 @@ function buildSMSSystemPrompt(lead) {
   - Always mention the special ends Sunday to create urgency
   - Always push for the deposit after confirming the appointment
   - You CAN send photos — always use [SEND_PHOTO: key] tags
+  - NEVER substitute the visor strip for a free sunroof — they are completely different services
+  - The visor strip is a small strip at the top of the windshield (5-6 inches). A sunroof is a separate panel on the roof
+  - Sunroof tinting is ALWAYS an add-on, never included in any special
+  - If a customer asks about sunroof tinting: "Sunroof is an add-on — $80 for a single panel or $160 for a dual sunroof. Want me to add that to your appointment?"
   - If they say STOP or not interested → "No problem! Feel free to reach out anytime 🙏" then stop
   - Keep every reply to 1-3 sentences — this is SMS not email
   - Today is ${new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric', timeZone: 'America/Chicago' })}
