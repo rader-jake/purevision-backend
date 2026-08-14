@@ -59,6 +59,17 @@ db.exec(`
   )
 `);
 
+db.prepare(`CREATE TABLE IF NOT EXISTS call_logs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  lead_id INTEGER,
+  shop_id TEXT,
+  lead_name TEXT,
+  lead_phone TEXT,
+  outcome TEXT,
+  notes TEXT DEFAULT '',
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+)`).run();
+
 // ─── SCHEDULED JOBS TABLE ─────────────────────────────────────────────────────
 db.exec(`
   CREATE TABLE IF NOT EXISTS scheduled_jobs (
@@ -1006,6 +1017,32 @@ async function fetchMetaLead(leadgenId) {
     return null;
   }
 }
+
+// ─── ROUTE: LOG A CALL ───────────────────────────────────────────────────────
+app.post('/admin/log-call', (req, res) => {
+  const { secret, lead_id, shop_id, lead_name, lead_phone, outcome, notes } = req.body;
+  if (secret !== process.env.MANUAL_ENTRY_SECRET) return res.status(403).json({ error: 'Unauthorized' });
+
+  db.prepare(`
+    INSERT INTO call_logs (lead_id, shop_id, lead_name, lead_phone, outcome, notes)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `).run(lead_id, shop_id, lead_name, lead_phone, outcome, notes || '');
+
+  console.log(`[Call Log] ${lead_name} — ${outcome}`);
+  res.json({ success: true });
+});
+
+// ─── ROUTE: GET CALL LOGS ────────────────────────────────────────────────────
+app.get('/api/call-logs/:shopId', (req, res) => {
+  const { password } = req.query;
+  if (password !== 'purevision2026') return res.status(401).json({ error: 'Unauthorized' });
+
+  const logs = db.prepare(`
+    SELECT * FROM call_logs WHERE shop_id = ? ORDER BY created_at DESC
+  `).all(req.params.shopId);
+
+  res.json(logs);
+});
 
 // ═══════════════════════════════════════════════════════════════════════════
 // SHOPDESK META LEAD WEBHOOK — fully isolated from /webhook/meta (pure-vision-tints)
