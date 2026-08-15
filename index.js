@@ -1032,6 +1032,18 @@ app.post('/admin/log-call', (req, res) => {
   res.json({ success: true });
 });
 
+app.post('/admin/delete-call-logs', (req, res) => {
+  const { secret, phone } = req.body;
+  if (secret !== process.env.MANUAL_ENTRY_SECRET) return res.status(403).json({ error: 'Unauthorized' });
+
+  if (phone) {
+    const result = db.prepare(`DELETE FROM call_logs WHERE lead_phone = ?`).run(phone);
+    return res.json({ success: true, deleted: result.changes });
+  } else {
+    return res.status(400).json({ error: 'Provide phone number' });
+  }
+});
+
 // ─── ROUTE: GET CALL LOGS ────────────────────────────────────────────────────
 app.get('/api/call-logs/:shopId', (req, res) => {
   const { password } = req.query;
