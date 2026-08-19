@@ -357,7 +357,7 @@ app.post("/tools/send-deposit", async (req, res) => {
     console.log(`[Deposit Tool] Square link created: ${depositUrl}, orderId: ${orderId}`);
 
     // 2. Send deposit link via Blooio
-    const msg = `Here's your $20 deposit link to lock in your spot and qualify for the special at Pure Vision Tints — it goes toward your final price: ${depositUrl}`;
+    const msg = `Here's your $20 deposit link to lock in your spot and qualify for the special at Pure Vision Tints — it goes toward your final price 👇\n\n${depositUrl}`;
     await sendSMS(lead_phone, msg);
 
     // 3. Update lead record with order ID for webhook matching
