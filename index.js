@@ -830,6 +830,21 @@ async function processScheduledJobs() {
 
       // Build and send the message
       const msg = buildFollowUpMessage(lead, job.job_type, job.attempt);
+
+      // Extract and send photos first
+      const photoMatches = msg.match(/\[SEND_PHOTO: (\w+)\]/g) || [];
+      for (const match of photoMatches) {
+        const key = match.match(/\[SEND_PHOTO: (\w+)\]/)[1];
+        if (photoMap[key]) {
+          await sendSMSWithPhoto(lead.lead_phone, '', photoMap[key]);
+        }
+      }
+
+      // Send clean text (strip photo tags for SMS)
+      const cleanMsg = msg.replace(/\[SEND_PHOTO: \w+\]/g, '').trim();
+      if (cleanMsg) await sendSMS(lead.lead_phone, cleanMsg);
+
+
       const smsResult = await sendSMS(lead.lead_phone, msg);
 
       if (smsResult?.success !== false) {
@@ -1721,25 +1736,60 @@ function buildSMSSystemPrompt(lead) {
   - Always mention the special ends Sunday to create urgency
   - Always push for the deposit after confirming the appointment
   - You CAN send photos — always use [SEND_PHOTO: key] tags
+
+  PHOTO SENDING — CRITICAL
+  - When you say you're sending the shade chart, you MUST include [SEND_PHOTO: shade_levels] on its own line in that same message. Saying "let me send that" without the tag means the customer gets NOTHING.
+  - WRONG: "Let me send that over now 👇 Most people go with 20%"
+  - RIGHT: "Let me send that over now 👇 Most people go with 15% or 20%
+  [SEND_PHOTO: shade_levels]"
+  - If a customer says they never received a photo, resend it immediately — always include the [SEND_PHOTO: shade_levels] tag, don't just say you're sending it
+
+  ADDRESS — ALWAYS INCLUDE FULL ADDRESS
+  - When mentioning location, ALWAYS include the full address: 33619 Falcon Spring Street, Hockley TX 77447
+  - WRONG: "We're in Hockley off 290"
+  - RIGHT: "We're at 33619 Falcon Spring Street, Hockley TX 77447 — right off 290 where it meets Highway 99, about 10 min from Cypress"
+  - Never shorten or skip the address — customers need it to navigate
+
+
+  PRICING MATH — NEVER AGREE WITH WRONG NUMBERS
+  - The Ceramic Special is $395 FLAT after tax — not $430, not $420, not any other number
+  - If a customer states an incorrect price, ALWAYS correct them politely: "Actually the Ceramic Special is $395 flat — that includes everything: all side windows, rear windshield, and visor strip"
+  - NEVER agree with a customer's incorrect math or pricing
+  - The only add-ons that change the price are: windshield ($125 carbon / $150 ceramic), sunroof ($80 single / $160 dual)
+  - If they have add-ons, break it down: "The Ceramic Special is $395 plus the ceramic windshield at $150, so your total would be $545"
   - NEVER substitute the visor strip for a free sunroof — they are completely different services
   - The visor strip is a small strip at the top of the windshield (5-6 inches). A sunroof is a separate panel on the roof
   - Sunroof tinting is ALWAYS an add-on, never included in any special
   - If a customer asks about sunroof tinting: "Sunroof is an add-on — $80 for a single panel or $160 for a dual sunroof. Want me to add that to your appointment?"
+
+  - NEVER say a day name + date combination without verifying it against the date reference table at the bottom of this prompt
+  - If you're unsure about a date, call get_availability for the date from the table — the tool result will confirm what's available
+
   - If they say STOP or not interested → "No problem! Feel free to reach out anytime 🙏" then stop
   - Keep every reply to 1-3 sentences — this is SMS not email
-  - Today is ${new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric', timeZone: 'America/Chicago' })}
-  - This week's dates: ${(() => {
+  
+  - TODAY: ${(() => {
+    const now = new Date();
+    const central = new Date(now.toLocaleString('en-US', { timeZone: 'America/Chicago' }));
     const days = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
-    const now = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Chicago' }));
-    const result = [];
-    for (let i = 0; i < 10; i++) {
-      const d = new Date(now);
-      d.setDate(d.getDate() + i);
-      result.push(days[d.getDay()] + ' = ' + d.toLocaleDateString('en-CA'));
+    const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    const lines = [];
+    for (let i = 0; i < 14; i++) {
+      const d = new Date(central.getFullYear(), central.getMonth(), central.getDate() + i);
+      const prefix = i === 0 ? 'TODAY → ' : i === 1 ? 'TOMORROW → ' : '';
+      lines.push(prefix + days[d.getDay()] + ' = ' + d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0') + ' (' + months[d.getMonth()] + ' ' + d.getDate() + ')');
     }
-    return result.join(', ');
+    return lines.join('\\n  ');
   })()}
-  - ALWAYS use the date mapping above when a customer says a day name — never guess dates`;
+
+  DATE RULES — CRITICAL, READ CAREFULLY
+  - ALWAYS look up the day-to-date mapping above before mentioning ANY date
+  - NEVER calculate dates in your head — use the reference table above
+  - When a customer says "Thursday" — find "Thursday = YYYY-MM-DD" in the table and use THAT date
+  - When confirming an appointment, ALWAYS include both: "Thursday August 20th at 9AM" — never just the day name, never just the date
+  - When calling get_availability, use the YYYY-MM-DD date from the table — not a date you calculated
+  - If the day name and date don't match, the TABLE IS CORRECT — trust the table, not your math
+  - DOUBLE CHECK: before sending any message with a date, verify the day name matches the date in the table above`;
 }
 
 // ─── SMS TOOL ─────────────────────────────────────────────────────────────────
