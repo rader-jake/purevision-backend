@@ -79,3 +79,6 @@ try {
 try {
   db.exec(`ALTER TABLE leads ADD COLUMN form_id TEXT`);
 } catch(e) { /* already exists */ }
+try {
+  db.exec(`ALTER TABLE scheduled_jobs ADD COLUMN custom_message TEXT`);
+} catch(e) { /* already exists */ }
