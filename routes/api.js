@@ -19,6 +19,24 @@ router.get('/api/call-logs/:shopId', (req, res) => {
   res.json(logs);
 });
 
+// ─── ROUTE: LOGIN ─────────────────────────────────────────────────────────────
+app.post('/api/login', (req, res) => {
+  const { username, password } = req.body;
+  
+  const credentials = {
+    'jordy':  { password: 'purevision2026', shopId: 'pure-vision-tints' },
+    'ling':   { password: 'southwestepoxy', shopId: 'southwest-epoxy' },
+    'apex':   { password: 'apex2026', shopId: 'apex-window-tinting' },
+    'randall':{ password: 'backyardfun', shopId: 'backyard-fun-pools' },
+  };
+
+  const user = credentials[username];
+  if (user && user.password === password) {
+    return res.json({ success: true, shopId: user.shopId });
+  }
+  res.status(401).json({ error: 'Invalid credentials' });
+});
+
 // ─── JORDY SMS CONVERSATIONS ──────────────────────────────────────────────────
 router.get('/api/conversations/pure-vision-tints', async (req, res) => {
   const { password } = req.query;
