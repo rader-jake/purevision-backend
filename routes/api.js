@@ -20,7 +20,7 @@ router.get('/api/call-logs/:shopId', (req, res) => {
 });
 
 // ─── ROUTE: LOGIN ─────────────────────────────────────────────────────────────
-app.post('/api/login', (req, res) => {
+router.post('/api/login', (req, res) => {
   const { username, password } = req.body;
   
   const credentials = {
