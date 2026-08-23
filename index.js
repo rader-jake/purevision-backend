@@ -1,5 +1,5 @@
+import "dotenv/config";
 import express from "express";
-import dotenv from "dotenv";
 import Database from "better-sqlite3";
 import twilio from "twilio";
 import { google } from "googleapis";
@@ -8,8 +8,6 @@ import crypto from 'node:crypto';
 import cron from "node-cron";
 // import { runSocialPost, postToInstagram, postToFacebook } from './social-post.js';
 
-
-dotenv.config();
 
 const app = express();
 const db = new Database(process.env.DB_PATH || "purevision.db");
