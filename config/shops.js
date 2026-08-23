@@ -63,3 +63,16 @@ export const SHOP_CONFIGS = {
     },
   },
 };
+
+// ─── FORM ID → INDUSTRY MAPPING ──────────────────────────────────────────────
+// Maps your two Meta lead form IDs to a human-readable industry label.
+// Get the real form_id values from your Railway logs — look for the
+// "form_id" field in the [ShopDesk Meta] Webhook received log line.
+export const SHOPDESK_FORM_INDUSTRY = {
+  "2150195912490394": "tint shop",        // ← replace with your real automotive/tint form_id
+  "2417887732065256": "epoxy flooring business",
+};
+
+export function getShopdeskIndustryLabel(formId) {
+  return SHOPDESK_FORM_INDUSTRY[formId] || "business";
+}

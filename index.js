@@ -12,7 +12,7 @@ const app = express();
 import { db } from "./db/connection.js";
 import "./db/init.js";
 // ─── SHOP CONFIG ──────────────────────────────────────────────────────────────
-import { SHOP_CONFIGS } from "./config/shops.js";
+import { SHOP_CONFIGS, getShopdeskIndustryLabel } from "./config/shops.js";
 // ─── GOOGLE CALENDAR CLIENT ───────────────────────────────────────────────────
 import {
   googleAuth,
@@ -752,19 +752,6 @@ app.get('/api/call-logs/:shopId', (req, res) => {
 // to the leadgen field on your ShopDesk ad's Page/form — do NOT point your
 // existing Pure Vision Tints subscription at this URL.
 // ═══════════════════════════════════════════════════════════════════════════
-
-// ─── FORM ID → INDUSTRY MAPPING ──────────────────────────────────────────────
-// Maps your two Meta lead form IDs to a human-readable industry label.
-// Get the real form_id values from your Railway logs — look for the
-// "form_id" field in the [ShopDesk Meta] Webhook received log line.
-const SHOPDESK_FORM_INDUSTRY = {
-  "2150195912490394": "tint shop",        // ← replace with your real automotive/tint form_id
-  "2417887732065256": "epoxy flooring business",
-};
-
-function getShopdeskIndustryLabel(formId) {
-  return SHOPDESK_FORM_INDUSTRY[formId] || "business";
-}
 
 // ─── ROUTE: SHOPDESK META WEBHOOK VERIFICATION ───────────────────────────────
 app.get("/webhook/shopdesk-meta", (req, res) => {
