@@ -845,8 +845,6 @@ async function processScheduledJobs() {
       if (cleanMsg) await sendSMS(lead.lead_phone, cleanMsg);
 
 
-      const smsResult = await sendSMS(lead.lead_phone, msg);
-
       if (smsResult?.success !== false) {
         db.prepare(`INSERT INTO sms_messages (lead_id, direction, body) VALUES (?, ?, ?)`)
           .run(lead.id, 'outbound', msg);
