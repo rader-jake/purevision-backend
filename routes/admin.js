@@ -297,4 +297,45 @@ router.get('/admin/jobs', (req, res) => {
   res.json({ pending_jobs: jobs.length, jobs });
 });
 
+// ─── ROUTE: GET REVIVABLE LEADS ──────────────────────────────────────────────
+app.get('/admin/revivable-leads', (req, res) => {
+  const { secret } = req.query;
+  if (secret !== process.env.MANUAL_ENTRY_SECRET) return res.status(403).json({ error: 'Unauthorized' });
+
+  const leads = db.prepare(`
+    SELECT l.*, 
+      (SELECT body FROM sms_messages WHERE lead_id = l.id AND direction = 'inbound' ORDER BY created_at DESC LIMIT 1) as last_inbound,
+      (SELECT body FROM sms_messages WHERE lead_id = l.id AND direction = 'outbound' ORDER BY created_at DESC LIMIT 1) as last_outbound,
+      (SELECT COUNT(*) FROM sms_messages WHERE lead_id = l.id) as msg_count
+    FROM leads l
+    WHERE l.shop_id = 'pure-vision-tints'
+    AND l.call_status IN ('dead', 'mia')
+    AND l.created_at > datetime('now', '-30 days')
+    ORDER BY l.created_at DESC
+  `).all();
+
+  res.json(leads);
+});
+
+// ─── ROUTE: SEND DISCOUNT TO SPECIFIC LEAD ───────────────────────────────────
+app.post('/admin/send-discount', async (req, res) => {
+  const { secret, lead_id, message } = req.body;
+  if (secret !== process.env.MANUAL_ENTRY_SECRET) return res.status(403).json({ error: 'Unauthorized' });
+
+  const lead = db.prepare(`SELECT * FROM leads WHERE id = ?`).get(lead_id);
+  if (!lead) return res.status(404).json({ error: 'Lead not found' });
+
+  await sendSMS(lead.lead_phone, message);
+
+  db.prepare(`INSERT INTO sms_messages (lead_id, direction, body) VALUES (?, ?, ?)`)
+    .run(lead.id, 'outbound', message);
+
+  // Reactivate so AI handles their reply
+  db.prepare(`UPDATE leads SET call_status = 'pending' WHERE id = ?`)
+    .run(lead.id);
+
+  console.log(`[Revive] Discount sent to ${lead.lead_name} (${lead.lead_phone})`);
+  res.json({ success: true });
+});
+
 export default router;
