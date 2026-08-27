@@ -298,7 +298,7 @@ router.get('/admin/jobs', (req, res) => {
 });
 
 // ─── ROUTE: GET REVIVABLE LEADS ──────────────────────────────────────────────
-app.get('/admin/revivable-leads', (req, res) => {
+router.get('/admin/revivable-leads', (req, res) => {
   const { secret } = req.query;
   if (secret !== process.env.MANUAL_ENTRY_SECRET) return res.status(403).json({ error: 'Unauthorized' });
 
@@ -318,7 +318,7 @@ app.get('/admin/revivable-leads', (req, res) => {
 });
 
 // ─── ROUTE: SEND DISCOUNT TO SPECIFIC LEAD ───────────────────────────────────
-app.post('/admin/send-discount', async (req, res) => {
+router.post('/admin/send-discount', async (req, res) => {
   const { secret, lead_id, message } = req.body;
   if (secret !== process.env.MANUAL_ENTRY_SECRET) return res.status(403).json({ error: 'Unauthorized' });
 
