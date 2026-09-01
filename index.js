@@ -20,7 +20,7 @@ app.use('/webhook/sms/inbound', express.raw({ type: 'application/json' }));
 app.use(express.json());
 
 app.use(cors({
-  origin: ["https://shopdesk.ai", "https://www.shopdesk.ai", "http://localhost:3000", "null"],
+  origin: ["https://shopdesk.ai", "https://www.shopdesk.ai", "http://localhost:3000", "https://purevision-booking.vercel.app/", "null"],
   methods: ["GET", "POST", "PATCH", "DELETE"],
 }));
 
