@@ -254,7 +254,7 @@ router.post('/admin/deduplicate-leads', (req, res) => {
 });
 
 // ─── ROUTE: SEND MESSAGE WITH CLICKABLE LINK ATTACHMENT ──────────────────────
-app.post('/admin/send-message-with-link', async (req, res) => {
+router.post('/admin/send-message-with-link', async (req, res) => {
   const { secret, lead_id, message, attachment_url } = req.body;
   if (secret !== process.env.MANUAL_ENTRY_SECRET) return res.status(403).json({ error: 'Unauthorized' });
 
