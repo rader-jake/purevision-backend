@@ -203,7 +203,7 @@ router.post("/webhook/meta", async (req, res) => {
           if (shop.smsOnly) {
             const delay = Math.floor(Math.random() * 60000) + 30000;
             setTimeout(async () => {
-              const msg = `Hey ${leadData.name}! This is Marissa with Pure Vision Tints. You reached out about tinting your ${leadData.vehicle || 'vehicle'} — were you still interested in getting that done?`;
+              const msg = `Hey ${leadData.name}! This is Jake with Pure Vision Tints. You reached out about tinting your ${leadData.vehicle || 'vehicle'} — were you still interested in getting that done?`;
               const smsResult = await sendSMS(leadData.phone, msg);
               if (smsResult?.success !== false) {
                 db.prepare(`INSERT INTO sms_messages (lead_id, direction, body) VALUES (?, ?, ?)`)
@@ -442,7 +442,7 @@ router.post("/webhook/sms-only/:shopId", async (req, res) => {
       msg = `Hey ${lead.leadName}! Thanks for reaching out to Apex Window Tinting. You inquired about our ${lead.leadSpecial || 'Summer Special'} for your ${lead.leadVehicle || 'vehicle'} — were you still interested in getting that done?`;
     }
     else {
-      msg = `Hey ${lead.leadName}! This is Marissa with Pure Vision Tints. You reached out about tinting your ${lead.leadVehicle} — were you still interested in getting that done?`;
+      msg = `Hey ${lead.leadName}! This is Jake with Pure Vision Tints. You reached out about tinting your ${lead.leadVehicle} — were you still interested in getting that done?`;
     }
 
     const smsResult = await sendSMS(lead.leadPhone, msg);

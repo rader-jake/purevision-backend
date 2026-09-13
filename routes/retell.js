@@ -85,7 +85,7 @@ router.post("/webhook/retell/call-ended", async (req, res) => {
         }
       }, 2 * 60 * 1000);
     } else if (attempts >= 2) {
-      const msg = `Hey ${lead.lead_name}! This is Marissa from Pure Vision Tints. We tried reaching you about tinting your ${lead.lead_vehicle} but couldn't connect. Were you still interested?`;
+      const msg = `Hey ${lead.lead_name}! This is Jake from Pure Vision Tints. We tried reaching you about tinting your ${lead.lead_vehicle} but couldn't connect. Were you still interested?`;
       await sendSMS(lead.lead_phone, msg);
       db.prepare(`INSERT INTO sms_messages (lead_id, direction, body) VALUES (?, ?, ?)`)
         .run(lead.id, 'outbound', msg);
