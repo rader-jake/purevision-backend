@@ -253,6 +253,51 @@ router.post('/admin/deduplicate-leads', (req, res) => {
   res.json({ success: true, deleted });
 });
 
+// ─── ROUTE: SEND MESSAGE WITH CLICKABLE LINK ATTACHMENT ──────────────────────
+app.post('/admin/send-message-with-link', async (req, res) => {
+  const { secret, lead_id, message, attachment_url } = req.body;
+  if (secret !== process.env.MANUAL_ENTRY_SECRET) return res.status(403).json({ error: 'Unauthorized' });
+
+  const lead = db.prepare(`SELECT * FROM leads WHERE id = ?`).get(lead_id);
+  if (!lead) return res.status(404).json({ error: 'Lead not found' });
+
+  try {
+    const encodedTo = encodeURIComponent(lead.lead_phone);
+    const body = {
+      text: message,
+      fromNumber: process.env.BLOOIO_NUMBER,
+    };
+
+    // Use Blooio's attachment feature to make the URL clickable
+    if (attachment_url) {
+      body.attachments = [attachment_url];
+    }
+
+    const resp = await fetch(`https://backend.blooio.com/v2/api/chats/${encodedTo}/messages`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${process.env.BLOOIO_API_KEY}`
+      },
+      body: JSON.stringify(body)
+    });
+
+    const data = await resp.json();
+    console.log('[SMS Link] Sent:', JSON.stringify(data));
+
+    if (!data.error) {
+      db.prepare(`INSERT INTO sms_messages (lead_id, direction, body) VALUES (?, ?, ?)`)
+        .run(lead_id, 'outbound', `${message}\n${attachment_url}`);
+      return res.json({ success: true });
+    }
+
+    res.status(500).json({ error: data.error });
+  } catch(e) {
+    console.error('[SMS Link] Failed:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // ─── ROUTE: DELETE OUTREACH LEAD ─────────────────────────────────────────────
 router.post('/admin/delete-outreach-lead', (req, res) => {
   const { secret, id } = req.body;

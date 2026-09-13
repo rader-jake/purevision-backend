@@ -132,11 +132,11 @@ router.post("/webhook/ghl/:shopId", async (req, res) => {
 
   if (shop.smsOnly) {
     // Random human-like delay 30-90 seconds
-    const delay = Math.floor(Math.random() * 60000) + 30000;
-    console.log(`[${shopId}] Sending first SMS to ${lead.leadName} in ${Math.round(delay/1000)}s`);
+    const delay = 3000;
+    console.log(`[${shopId}] Sending first SMS to ${lead.leadName} in 3s`);
 
     setTimeout(async () => {
-      const msg = `Hey ${lead.leadName}! This is Marissa with Pure Vision Tints. You reached out about tinting your ${lead.leadVehicle} — were you still interested in getting that done?`;
+      msg = `Hey ${lead.leadName}! Saw you inquired about tinting your ${lead.leadVehicle} — how can I help?`;
       const smsResult = await sendSMS(lead.leadPhone, msg);
       if (smsResult?.success !== false) {
         db.prepare(`INSERT INTO sms_messages (lead_id, direction, body) VALUES (?, ?, ?)`)
