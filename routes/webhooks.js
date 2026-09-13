@@ -136,7 +136,7 @@ router.post("/webhook/ghl/:shopId", async (req, res) => {
     console.log(`[${shopId}] Sending first SMS to ${lead.leadName} in 3s`);
 
     setTimeout(async () => {
-      msg = `Hey ${lead.leadName}! Saw you inquired about tinting your ${lead.leadVehicle} — how can I help?`;
+      let msg = `Hey ${lead.leadName}! Saw you inquired about tinting your ${lead.leadVehicle} — how can I help?`;
       const smsResult = await sendSMS(lead.leadPhone, msg);
       if (smsResult?.success !== false) {
         db.prepare(`INSERT INTO sms_messages (lead_id, direction, body) VALUES (?, ?, ?)`)
