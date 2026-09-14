@@ -264,8 +264,8 @@ router.post("/tools/send-deposit", async (req, res) => {
     const { depositUrl, orderId } = await createDepositLink(lead_phone);
 
     // 2. Send deposit link via Blooio
-    const msg = `Here's your $20 deposit link to lock in your spot and qualify for the special at Pure Vision Tints — it goes toward your final price 👇\n\n${depositUrl}`;
-    await sendSMS(lead_phone, msg);
+    const msg = `Here's your $20 deposit link to lock in your spot and qualify for the special at Pure Vision Tints — it goes toward your final price`;
+    await sendSMSWithPhoto(lead_phone, msg, depositUrl);
 
     // 3. Update lead record with order ID for webhook matching
     const lead = db.prepare(`SELECT id FROM leads WHERE lead_phone = ? ORDER BY created_at DESC LIMIT 1`).get(lead_phone);
@@ -273,7 +273,7 @@ router.post("/tools/send-deposit", async (req, res) => {
       db.prepare(`UPDATE leads SET deposit_sent = 1, square_order_id = ? WHERE id = ?`)
         .run(orderId, lead.id);
       db.prepare(`INSERT INTO sms_messages (lead_id, direction, body) VALUES (?, ?, ?)`)
-        .run(lead.id, 'outbound', msg);
+        .run(lead.id, 'outbound', `${msg}\n${depositUrl}`);
     }
 
     return res.json({

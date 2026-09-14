@@ -424,6 +424,12 @@ router.post("/webhook/sms-only/:shopId", async (req, res) => {
   const leadId = result.lastInsertRowid;
   res.status(200).json({ received: true, leadId });
 
+  // If lead came from booking page, skip the opening message — they're already booking
+  if (req.body.source === 'booking_page') {
+    console.log(`[${shopId}] Lead from booking page — skipping opening message`);
+    return;
+  }
+
   // Random human-like delay 30-90 seconds
   const delay = Math.floor(Math.random() * 60000) + 30000;
   console.log(`[${shopId}] Sending first SMS to ${lead.leadName} in ${Math.round(delay/1000)}s`);
