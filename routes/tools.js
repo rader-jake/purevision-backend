@@ -270,13 +270,14 @@ router.post("/tools/send-deposit", async (req, res) => {
         .run(orderId, lead.id);
     }
 
-    // Then send the deposit link
-    const msg = `Here's your $20 deposit link to lock in your spot and qualify for the special at Pure Vision Tints — it goes toward your final price 👇`;
-    await sendSMSWithPhoto(lead_phone, msg, depositUrl);
+    // Send text first
+    await sendSMS(lead_phone, `Here's your $20 deposit link to lock in your spot and qualify for the special at Pure Vision Tints — it goes toward your final price 👇`);
+    // Send link alone in a second message — phones auto-detect standalone URLs as clickable
+    await sendSMS(lead_phone, depositUrl);
 
     if (lead) {
       db.prepare(`INSERT INTO sms_messages (lead_id, direction, body) VALUES (?, ?, ?)`)
-        .run(lead.id, 'outbound', `${msg}\n${depositUrl}`);
+        .run(lead.id, 'outbound', `Deposit link sent: ${depositUrl}`);
     }
 
     return res.json({
