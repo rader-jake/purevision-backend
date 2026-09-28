@@ -470,8 +470,17 @@ router.post("/webhook/sms-only/:shopId", async (req, res) => {
   res.status(200).json({ received: true, leadId });
 
   // If lead came from booking page, skip the opening message — they're already booking
-  if (req.body.source === 'booking_page') {
+    if (req.body.source === 'booking_page') {
     console.log(`[${shopId}] Lead from booking page — skipping opening message`);
+    
+    // Store a system note so this lead appears in the dashboard
+    const apptDetails = req.body.appointment_time 
+      ? `Requested: ${req.body.appointment_time}` 
+      : 'Browsing available slots';
+    
+    db.prepare(`INSERT INTO sms_messages (lead_id, direction, body) VALUES (?, ?, ?)`)
+      .run(leadId, 'outbound', `[BOOKING PAGE] ${lead.leadName} started booking via website. Vehicle: ${lead.leadVehicle || 'N/A'}. Special: ${lead.leadSpecial || 'N/A'}. ${apptDetails}. Deposit: pending.`);
+    
     return;
   }
 
