@@ -253,6 +253,21 @@ router.post('/admin/deduplicate-leads', (req, res) => {
   res.json({ success: true, deleted });
 });
 
+// DELETE ALL PENDING JOBS (ADMIN) vvv 
+
+router.post('/admin/cancel-all-pending', (req, res) => {
+  const { secret } = req.body;
+  if (secret !== process.env.MANUAL_ENTRY_SECRET) return res.status(403).json({ error: 'Unauthorized' });
+
+  const result = db.prepare(`
+    UPDATE scheduled_jobs SET status = 'cancelled' 
+    WHERE status = 'pending'
+  `).run();
+
+  console.log(`[Admin] Cancelled ALL ${result.changes} pending jobs`);
+  res.json({ success: true, cancelled: result.changes });
+});
+
 // ─── ROUTE: SEND MESSAGE WITH CLICKABLE LINK ATTACHMENT ──────────────────────
 router.post('/admin/send-message-with-link', async (req, res) => {
   const { secret, lead_id, message, attachment_url } = req.body;
