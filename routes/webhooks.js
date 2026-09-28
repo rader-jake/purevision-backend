@@ -5,23 +5,31 @@ import { SHOP_CONFIGS, getShopdeskIndustryLabel } from "../config/shops.js";
 import { sendSMS, sendSMSWithPhoto, handleOwnerPingTag } from "../services/sms.js";
 import { photoMap } from "../services/photo-map.js";
 import { scheduleFollowUpJobs, scheduleColdNudgeJobs, cancelAllJobsForLead } from "../workers/follow-ups.js";
+import { bookGoogleCalendarEvent } from "../services/calendar.js";
 import { runSMSAgent } from "../agents/sms-agent.js";
 import { triggerRetellCall } from "./retell.js";
 
 const router = express.Router();
 
 function mapLead(payload, fieldMapping) {
-  let leadSpecial = "Ceramic Special";
-  const formName = payload["name"] ||
-                   payload?.workflow?.lastAttributionSource?.formName ||
-                   "";
-  if (formName.toLowerCase().includes("199") ||
-      formName.toLowerCase().includes("carbon")) {
-    leadSpecial = "Carbon Special";
-  } else if (formName.toLowerCase().includes("299") ||
-             formName.toLowerCase().includes("295") ||
-             formName.toLowerCase().includes("ceramic")) {
+  // Prefer an explicit special sent in the payload (e.g. the booking page's
+  // lead_special_override, mapped via fieldMapping.leadSpecial) over guessing
+  // from the form name — it's exact instead of a substring match.
+  let leadSpecial = fieldMapping.leadSpecial ? payload[fieldMapping.leadSpecial] : null;
+
+  if (!leadSpecial) {
     leadSpecial = "Ceramic Special";
+    const formName = payload["name"] ||
+                     payload?.workflow?.lastAttributionSource?.formName ||
+                     "";
+    if (formName.toLowerCase().includes("199") ||
+        formName.toLowerCase().includes("carbon")) {
+      leadSpecial = "Carbon Special";
+    } else if (formName.toLowerCase().includes("299") ||
+               formName.toLowerCase().includes("295") ||
+               formName.toLowerCase().includes("ceramic")) {
+      leadSpecial = "Ceramic Special";
+    }
   }
   return {
     leadName:    payload[fieldMapping.leadName]    || "there",
@@ -66,12 +74,49 @@ router.post("/webhooks/square", async (req, res) => {
       return res.status(200).json({ ok: true });
     }
 
+    // Book the calendar appointment now that payment is confirmed. Leads booked
+    // through the AI-conversation flow already have booked_at set at this point
+    // (they book before the deposit) — only book here if there's a pending
+    // booking-page time still waiting on payment.
+    let calendarFailed = false;
+    if (!lead.booked_at && lead.pending_appointment_time) {
+      try {
+        await bookGoogleCalendarEvent({
+          lead_name:    lead.lead_name,
+          lead_phone:   lead.lead_phone,
+          lead_vehicle: lead.lead_vehicle,
+          lead_special: lead.lead_special,
+          booked_at:    lead.pending_appointment_time,
+        });
+        db.prepare(`UPDATE leads SET booked_at = ? WHERE id = ?`)
+          .run(lead.pending_appointment_time, lead.id);
+        lead.booked_at = lead.pending_appointment_time; // so the message below picks it up
+      } catch (err) {
+        calendarFailed = true;
+        console.error(`[Square Webhook] Calendar booking FAILED after payment for lead ${lead.id} (${lead.lead_name}):`, err.message);
+        if (process.env.JAKE_PHONE) {
+          await sendSMS(process.env.JAKE_PHONE, `⚠️ ${lead.lead_name} (${lead.lead_phone}) paid their $20 deposit but the calendar booking failed for ${lead.pending_appointment_time}. Add it manually — customer already paid.`);
+        }
+      }
+    }
+
     // Mark deposit as paid
     db.prepare(`UPDATE leads SET deposit_paid = 1, call_status = 'confirmed' WHERE id = ?`)
       .run(lead.id);
 
-    // Send confirmation via SMS
-    const confirmMsg = `Hey ${lead.lead_name}! 🎉 Your deposit is confirmed — you're officially locked in for your ${lead.lead_special || 'Ceramic Special'} at the special price. See you at your appointment! We'll take great care of your ${lead.lead_vehicle}.`;
+    // Send confirmation via SMS — plain text, no links/attachments (Blooio blocks
+    // those for contacts who haven't replied yet)
+    let confirmMsg;
+    if (lead.booked_at && !calendarFailed) {
+      const date = new Date(lead.booked_at.replace(" ", "T") + ":00-05:00");
+      const friendlyTime = date.toLocaleString("en-US", {
+        weekday: "long", month: "long", day: "numeric",
+        hour: "numeric", minute: "2-digit", timeZone: "America/Chicago",
+      });
+      confirmMsg = `Hey ${lead.lead_name}! Your deposit is confirmed and your appointment is locked in for ${friendlyTime}. See you at 33619 Falcon Spring Street, Hockley TX 77447!`;
+    } else {
+      confirmMsg = `Hey ${lead.lead_name}! Your deposit is confirmed — we'll text you shortly to lock in your appointment time. See you soon at Pure Vision Tints!`;
+    }
     await sendSMS(lead.lead_phone, confirmMsg);
 
     db.prepare(`INSERT INTO sms_messages (lead_id, direction, body) VALUES (?, ?, ?)`)

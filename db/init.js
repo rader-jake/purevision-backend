@@ -82,3 +82,6 @@ try {
 try {
   db.exec(`ALTER TABLE scheduled_jobs ADD COLUMN custom_message TEXT`);
 } catch(e) { /* already exists */ }
+try {
+  db.exec(`ALTER TABLE leads ADD COLUMN pending_appointment_time TEXT`);
+} catch(e) { /* already exists */ }

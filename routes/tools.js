@@ -295,6 +295,58 @@ router.post("/tools/send-deposit", async (req, res) => {
   }
 });
 
+// ─── ROUTE: CREATE DEPOSIT LINK (booking page — no SMS, returned directly) ───
+// Used by the booking page instead of /tools/book-appointment + /tools/send-deposit.
+// The appointment is NOT booked on the calendar here — it's stored as "pending"
+// on the lead and only booked by the Square webhook once payment actually completes.
+// No SMS is sent from this route: Blooio blocks links/attachments to contacts
+// who haven't replied yet, so the booking page shows the deposit_url as a button instead.
+router.post("/tools/create-deposit-link", async (req, res) => {
+  console.log("\n[Create Deposit Link Tool] Called with:", JSON.stringify(req.body, null, 2));
+
+  const raw              = req.body;
+  const args              = raw.args || raw;
+  const lead_phone        = args.lead_phone;
+  const appointment_time  = args.appointment_time;
+
+  if (!lead_phone || !appointment_time) {
+    return res.json({
+      success: false,
+      response: "I wasn't able to create your deposit link. Please confirm your phone number and appointment time.",
+    });
+  }
+
+  try {
+    // 1. Create Square payment link via REST API (no SDK)
+    const { depositUrl, orderId } = await createDepositLink(lead_phone);
+
+    // 2. Store the order ID + the requested appointment time on the lead so the
+    //    Square webhook can find it and book the calendar once payment completes
+    const lead = db.prepare(`SELECT id FROM leads WHERE lead_phone = ? ORDER BY created_at DESC LIMIT 1`).get(lead_phone);
+    if (lead) {
+      db.prepare(`
+        UPDATE leads
+        SET deposit_sent = 1, square_order_id = ?, pending_appointment_time = ?
+        WHERE id = ?
+      `).run(orderId, appointment_time, lead.id);
+    } else {
+      console.warn(`[Create Deposit Link Tool] No lead found for phone ${lead_phone} — deposit link created but not linked to a lead`);
+    }
+
+    return res.json({
+      success: true,
+      deposit_url: depositUrl,
+    });
+
+  } catch (err) {
+    console.error("[Create Deposit Link Tool] Error:", err.message);
+    return res.json({
+      success: false,
+      response: "Something went wrong creating your deposit link. Please try again or text us directly.",
+    });
+  }
+});
+
 // ─── ROUTE: CHECK DEPOSIT STATUS ─────────────────────────────────────────────
 router.post("/tools/check-deposit-status", async (req, res) => {
   const raw = req.body;
