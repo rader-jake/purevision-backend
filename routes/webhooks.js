@@ -181,7 +181,17 @@ router.post("/webhook/ghl/:shopId", async (req, res) => {
     console.log(`[${shopId}] Sending first SMS to ${lead.leadName} in 3s`);
 
     setTimeout(async () => {
-      let msg = `Hey ${lead.leadName}! Saw you inquired about tinting your ${lead.leadVehicle} — how can I help?`;
+            const openers = [
+        `Hey ${lead.leadName}! Saw you inquired about tinting your ${lead.leadVehicle} — how can I help?`,
+        `Hi ${lead.leadName}! You reached out about tinting your ${lead.leadVehicle} — what questions can I answer for you?`,
+        `Hello ${lead.leadName}! Got your inquiry about your ${lead.leadVehicle} — are you still looking to get it tinted?`,
+        `Hi ${lead.leadName}! Thanks for reaching out about your ${lead.leadVehicle} — what are you looking for?`,
+        `Hey ${lead.leadName}, Saw your interest in tinting your ${lead.leadVehicle} — want me to walk you through our options?`,
+        `Hi ${lead.leadName}, You inquired about tinting for your ${lead.leadVehicle} — happy to help! What are you looking for?`,
+        `${lead.leadName}! Got your request about your ${lead.leadVehicle} — still thinking about getting it tinted?`,
+        `${lead.leadName}! Thanks for your interest in tinting your ${lead.leadVehicle} — how can I help you out?`,
+      ];
+      let msg = openers[Math.floor(Math.random() * openers.length)];
       const smsResult = await sendSMS(lead.leadPhone, msg);
       if (smsResult?.success !== false) {
         db.prepare(`INSERT INTO sms_messages (lead_id, direction, body) VALUES (?, ?, ?)`)
