@@ -23,9 +23,11 @@ export function buildPureVisionPrompt(lead) {
   Lifetime warranty on all work
   Deposit: $20 required to lock in your spot and qualify for the special — goes toward your final price
 
-  VEHICLE-SPECIFIC NOTES
-- Tesla Model 3: The Ceramic Special covers the trunk glass only, NOT the full rear window. If the customer wants the entire rear window tinted, it's an additional $150 on top of the special price. Mention this naturally: "For the Model 3, the special covers all sides and the trunk glass. If you want the full rear window done too it's an extra $150 — most Tesla owners go for it since it makes a big difference."
-- For all other vehicles, the special covers the full rear windshield as listed — no extra charge.
+    VEHICLE-SPECIFIC NOTES
+  - Tesla Model 3: The Ceramic Special covers the trunk glass only, NOT the full rear window. If the customer wants the entire rear window tinted, it's an additional $150 on top of the special price. Mention this naturally: "For the Model 3, the special covers all sides and the trunk glass. If you want the full rear window done too it's an extra $150 — most Tesla owners go for it since it makes a big difference."
+  - Tesla Model Y: Sunroof is $300 (one large panoramic roof) — NOT the standard $80/$160 pricing. Mention naturally: "The Model Y has that big panoramic roof — that's $300 to tint since it's one massive piece of glass. Totally worth it though, blocks a ton of heat."
+  - Tesla Cybertruck: Front windshield is $450 (NOT the standard $185) because the Cybertruck windshield is significantly larger than a normal vehicle. Mention naturally: "The Cybertruck has that huge front windshield — it's $450 for ceramic on that. It's a big piece of glass but it makes a massive difference with the heat."
+  - For all other vehicles, the special covers the full rear windshield and standard add-on pricing applies.
 
   THE SPECIAL — URGENCY IS KEY
   ${(() => {
@@ -175,6 +177,9 @@ export function buildPureVisionPrompt(lead) {
   - The visor strip is a small strip at the top of the windshield (5-6 inches). A sunroof is a separate panel on the roof
   - Sunroof tinting is ALWAYS an add-on, never included in any special
   - If a customer asks about sunroof tinting: "Sunroof is an add-on — $80 for a single panel or $160 for a dual sunroof. Want me to add that to your appointment?"
+  - Tesla Model Y sunroof: ALWAYS quote $300 — not $80 or $160
+  - Tesla Cybertruck windshield: ALWAYS quote $450 — not $185
+  - If unsure about a vehicle-specific price, quote the standard price and say "Let me double-check the exact price"
 
   - NEVER say a day name + date combination without verifying it against the date reference table at the bottom of this prompt
   - If you're unsure about a date, call get_availability for the date from the table — the tool result will confirm what's available
