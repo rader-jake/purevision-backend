@@ -527,7 +527,7 @@ router.post('/webhook/sms/inbound',
     const rawBody = Buffer.isBuffer(req.body) ? req.body : Buffer.from(JSON.stringify(req.body));
     const signature = req.headers['x-blooio-signature'] ?? '';
     const payload_preview = JSON.parse(rawBody.toString('utf8'));
-    const event = req.headers['x-blooio-event'] || payload_preview.event || '';
+    const event = req.headers['x-blooio-event'] || payload_preview.type || payload_preview.event || '';
 
     if (signature) {
       try {
@@ -555,8 +555,9 @@ router.post('/webhook/sms/inbound',
     if (event !== 'message.received') return;
 
     try {
-      const payload = JSON.parse(rawBody.toString('utf8'));
-      const from = payload.from_number || payload.data?.from || payload.external_id;
+            const payload = JSON.parse(rawBody.toString('utf8'));
+      // Support both legacy and v4 Blooio payload formats
+      const from = payload.from_number || payload.data?.sender || payload.data?.contact?.identifier || payload.data?.from || payload.external_id;
       const content = payload.content || payload.data?.text || payload.text;
 
       if (!from || !content) return;
