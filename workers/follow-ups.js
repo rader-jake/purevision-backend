@@ -7,12 +7,19 @@ export function buildFollowUpMessage(lead, jobType, attempt) {
 
   if (jobType === 'follow_up') {
     // Never replied at all
-      if (shopId === 'pure-vision-tints') {
-      return `Hey ${name}! Just checking in — still thinking about tinting your ${lead.lead_vehicle}? Happy to answer any questions 😊`;
+          if (shopId === 'pure-vision-tints') {
+      const followUps = [
+        `Hey ${name}! Just checking in, were you still wanting to tint your ${lead.lead_vehicle}?`,
+        `Hi ${name}! Wanted to follow up on your tint inquiry for your ${lead.lead_vehicle}, were you still interested in getting that done?`,
+        `Hey ${name}! Still interested in getting your ${lead.lead_vehicle} tinted?`,
+        `Hi ${name}! Following up on your ${lead.lead_vehicle} — let me know if you'd like to get on the schedule!`,
+        `Hey ${name}! Just circling back about tinting your ${lead.lead_vehicle}`,
+      ];
+      return followUps[Math.floor(Math.random() * followUps.length)];
     } else if (shopId === 'southwest-epoxy') {
       const msgs = [
-        `Hey ${name}! Jake from Southwest Epoxy — still interested in the Spring Special? $1,499 flat for a 2-car garage, we have openings this week 👋`,
-        `Hey ${name}, just one last check-in — if the timing isn't right that's totally fine. Reach back out whenever you're ready 🙏`,
+        `Hey ${name}! Jake from Southwest Epoxy — still interested in the Spring Special? $1,499 flat for a 2-car garage, we have openings this week `,
+        `Hey ${name}, just one last check-in — if the timing isn't right that's totally fine. Reach back out whenever you're ready `,
       ];
       return msgs[Math.min(attempt - 1, msgs.length - 1)];
     }
@@ -20,20 +27,20 @@ export function buildFollowUpMessage(lead, jobType, attempt) {
     // Was replying but went quiet
     if (shopId === 'pure-vision-tints') {
       const msgs = [
-        `Hey ${name}, just checking back in, did you have any questions?`,
-        `Hey ${name}, no worries if the timing isn't right! Reach back out whenever you're ready 🙏`,
+        `Hey ${name}, just following up, did you have any questions?`,
+        `Hey ${name}, no worries if the timing isn't right! Reach back out whenever you're ready`,
       ];
       return msgs[Math.min(attempt - 1, msgs.length - 1)];
     } else if (shopId === 'southwest-epoxy') {
       const msgs = [
-        `Hey ${name}! Just checking back — still interested in the epoxy? Happy to lock in a time 😊`,
-        `Hey ${name}, no pressure at all! Whenever you're ready just reach back out 🙏`,
+        `Hey ${name}! Just checking back — still interested in the epoxy? Happy to lock in a time`,
+        `Hey ${name}, no pressure at all! Whenever you're ready just reach back out`,
       ];
       return msgs[Math.min(attempt - 1, msgs.length - 1)];
     }
     } 
 
-  return `Hey ${name}! Just checking back in — still interested? Happy to help whenever you're ready 🙏`;
+  return `Hey ${name}! Just checking back in, still interested?`;
 }
 
 // ─── SCHEDULE JOBS HELPER ─────────────────────────────────────────────────────
