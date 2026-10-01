@@ -582,8 +582,17 @@ router.post('/webhook/sms/inbound',
       `).get(from);
 
       if (!lead) {
-        console.log('[SMS] No lead found for', from);
-        return;
+        console.log('[SMS] New inbound from unknown number:', from);
+
+        // Auto-create a lead from the inbound text
+        const contactName = payload.data?.contact?.name || 'there';
+        const result = db.prepare(`
+          INSERT INTO leads (shop_id, lead_name, lead_phone, lead_vehicle, lead_special, call_status)
+          VALUES (?, ?, ?, ?, ?, ?)
+        `).run('pure-vision-tints', contactName, from, 'your vehicle', 'Ceramic Special', 'pending');
+
+        lead = db.prepare(`SELECT * FROM leads WHERE id = ?`).get(result.lastInsertRowid);
+        console.log(`[SMS] Auto-created lead ${lead.id} for ${contactName} (${from})`);
       }
       // Dedup check — skip if we already processed this exact message recently
       const recentDupe = db.prepare(`
