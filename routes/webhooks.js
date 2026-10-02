@@ -436,7 +436,7 @@ function buildShopdeskOpenerMessage(lead) {
 
   const leadsPhrase = lead.leadsPerMonth ? ` getting around ${lead.leadsPerMonth} leads a month and` : "";
 
-  return `Hey ${firstName}! Is this the owner of a${/^[aeiou]/i.test(industry) ? "n" : ""} ${industry}? I saw you're${leadsPhrase} dealing with ${challengePhrase} — that's exactly what ShopDesk helps fix 👋`;
+  return `Hey ${firstName}! How can I show you how shopdesk AI can help your service business?`;
 }
 
 // ─── UTILITY: NORMALIZE PHONE (SHOPDESK-SCOPED) ──────────────────────────────
