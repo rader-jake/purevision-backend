@@ -623,6 +623,14 @@ router.post('/webhook/sms/inbound',
         WHERE lead_id = ? AND job_type = 'follow_up' AND status = 'pending'
       `).run(lead.id);
 
+      // Baseline for the outbound dedup below: the newest outbound message that
+      // already exists. Anything with a higher id was sent while this message was
+      // being handled (a duplicate webhook's reply, or a manual text).
+      const lastOutboundId = db.prepare(`
+        SELECT COALESCE(MAX(id), 0) AS id FROM sms_messages
+        WHERE lead_id = ? AND direction = 'outbound'
+      `).get(lead.id).id;
+
       const history = db.prepare(`
         SELECT * FROM sms_messages
         WHERE lead_id = ? ORDER BY created_at ASC
@@ -648,16 +656,17 @@ router.post('/webhook/sms/inbound',
       console.log(`[SMS] Replying to ${lead.lead_name} in ${Math.round(typingDelay/1000)}s`);
 
       setTimeout(async () => {
-        // Outbound dedup — skip if we already replied recently
-        const recentReply = db.prepare(`
+        // Outbound dedup — skip only if something else was sent to this lead AFTER
+        // this message arrived. (A time window like "last 30s" wrongly counts the
+        // opener when the lead replies right away, silently dropping the AI's reply.)
+        const alreadyReplied = db.prepare(`
           SELECT id FROM sms_messages
-          WHERE lead_id = ? AND direction = 'outbound'
-          AND created_at > datetime('now', '-30 seconds')
+          WHERE lead_id = ? AND direction = 'outbound' AND id > ?
           LIMIT 1
-        `).get(lead.id);
+        `).get(lead.id, lastOutboundId);
 
-        if (recentReply) {
-          console.log(`[SMS] Already replied to ${lead.lead_name} in last 30s — skipping duplicate`);
+        if (alreadyReplied) {
+          console.log(`[SMS] Already replied to ${lead.lead_name} since this message arrived — skipping duplicate`);
           return;
         }
         // Extract and send photos first
