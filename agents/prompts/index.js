@@ -22,5 +22,9 @@ export function buildSMSSystemPrompt(lead) {
     return buildApexTintingPrompt(lead);
   }
 
+  if (lead.shop_id === 'pro-auto-designs') {
+    return buildProAutoDesignsPrompt(lead);
+  }
+
   return buildPureVisionPrompt(lead);
 }

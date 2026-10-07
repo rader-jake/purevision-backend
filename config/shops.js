@@ -50,6 +50,19 @@ export const SHOP_CONFIGS = {
     },
   },
 
+    "pro-auto-designs": {
+    shopId:     "pro-auto-designs",
+    shopName:   "Pro Auto Design",
+    smsOnly:    true,
+    retellAgentId: null,
+    fieldMapping: {
+      leadName:    "first_name",
+      leadPhone:   "phone",
+      leadVehicle: "Vehicle Information",
+      leadSpecial: "lead_special_override",
+    },
+  },
+
   "shopdesk-demo": {
     shopId:     "shopdesk-demo",
     shopName:   "ShopDesk AI",

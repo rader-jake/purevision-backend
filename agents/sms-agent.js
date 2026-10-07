@@ -65,6 +65,12 @@ export function getSMSTools(lead) {
   if (lead.shop_id === 'backyard-fun-pools') {
     return []; // No calendar tools for demo — just conversation
   }
+  if (lead.shop_id === 'apex-window-tinting') {
+    return []; // No calendar tools for demo — just conversation
+  }
+  if (lead.shop_id === 'pro-auto-designs') {
+    return []; // No calendar tools for demo — just conversation
+  }
 
   if (lead.shop_id === 'shopdesk-demo') {
     return []; // No tools for demo agent

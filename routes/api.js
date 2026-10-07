@@ -129,10 +129,27 @@ router.get('/api/conversations/shopdesk-demo', async (req, res) => {
   res.json(messages);
 });
 
+// BACKYARD FUN POOLS SMS CONVERSATIONS
+
 router.get('/api/conversations/backyard-fun-pools', async (req, res) => {
   const { password } = req.query;
   if (password !== 'backyardfun2026') return res.status(401).json({ error: 'Unauthorized' });
   const leads = db.prepare('SELECT * FROM leads WHERE shop_id = ?').all('backyard-fun-pools');
+  const leadIds = leads.map(l => l.id);
+  if (!leadIds.length) return res.json([]);
+  const placeholders = leadIds.map(() => '?').join(',');
+  const messages = db.prepare(`
+    SELECT * FROM sms_messages WHERE lead_id IN (${placeholders}) ORDER BY created_at ASC
+  `).all(...leadIds);
+  res.json(messages);
+});
+
+// PRO AUTO DESIGNS SMS CONVERSATIONS
+
+router.get('/api/conversations/pro-auto-designs', async (req, res) => {
+  const { password } = req.query;
+  if (password !== 'proauto2026') return res.status(401).json({ error: 'Unauthorized' });
+  const leads = db.prepare('SELECT * FROM leads WHERE shop_id = ?').all('pro-auto-designs');
   const leadIds = leads.map(l => l.id);
   if (!leadIds.length) return res.json([]);
   const placeholders = leadIds.map(() => '?').join(',');
