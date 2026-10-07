@@ -3,6 +3,7 @@ import { buildBackyardPoolsPrompt } from "./backyard-pools.js";
 import { buildShopdeskDemoPrompt } from "./shopdesk-demo.js";
 import { buildApexTintingPrompt } from "./apex-tinting.js";
 import { buildPureVisionPrompt } from "./pure-vision.js";
+import { buildProAutoDesignsPrompt } from "./pro-auto-designs.js";
 
 // ─── SMS SYSTEM PROMPT ────────────────────────────────────────────────────────
 export function buildSMSSystemPrompt(lead) {
