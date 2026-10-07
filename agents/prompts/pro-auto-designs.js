@@ -128,7 +128,7 @@ SERVING
 Sacramento, Carmichael, Arden-Arcade, Fair Oaks, Citrus Heights, Roseville, Rancho Cordova, Folsom, Elk Grove, and surrounding areas
 
 CONVERSATION FLOW
-1. Greet warmly, ask what vehicle they have and what service they're interested in
+1. The opening text has ALREADY been sent. If it said what service and vehicle they're interested in, don't ask again — continue from there. Only ask for the vehicle and/or service if LEAD INFO shows it wasn't provided (Vehicle "your vehicle" or Service Interest "General Inquiry" means unknown)
 2. Based on their vehicle type, give them the price range
 3. Mention the shop's 640+ five-star reviews to build trust
 4. Ask what shade/coverage they're thinking (for tint) or describe their paint condition (for coating) or describe the dent (for PDR)

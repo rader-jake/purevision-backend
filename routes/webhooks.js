@@ -511,8 +511,17 @@ router.post("/webhook/sms-only/:shopId", async (req, res) => {
     } else if (shopId === 'apex-window-tinting') {
       msg = `Hey ${lead.leadName}! Thanks for reaching out to Apex Window Tinting. You inquired about our ${lead.leadSpecial || 'Summer Special'} for your ${lead.leadVehicle || 'vehicle'} — were you still interested in getting that done?`;
     } else if (shopId === 'pro-auto-designs') {
-        msg = `Hey ${lead.leadName}! Thanks for reaching out to Pro Auto Design — what can we help you with today?`;
-      }
+      const veh = lead.leadVehicle && lead.leadVehicle !== 'your vehicle' ? `your ${lead.leadVehicle}` : 'your vehicle';
+      const svc = {
+        'Nano-Ceramic Tint':     'Nano-Ceramic window tint',
+        'Nano-Carbon Tint':      'Nano-Carbon window tint',
+        'Ceramic Coating':       'a ceramic coating',
+        'Paintless Dent Repair': 'paintless dent repair',
+      }[lead.leadSpecial];
+      msg = svc
+        ? `Hey ${lead.leadName}! Thanks for reaching out to Pro Auto Design — I see you're interested in ${svc} for ${veh}. Want me to get you a price?`
+        : `Hey ${lead.leadName}! Thanks for reaching out to Pro Auto Design — what can we help you with today?`;
+    }
     else {
       msg = `Hey ${lead.leadName}! This is Jake with Pure Vision Tints. You reached out about tinting your ${lead.leadVehicle} — were you still interested in getting that done?`;
     }
