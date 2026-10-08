@@ -56,6 +56,24 @@ db.prepare(`CREATE TABLE IF NOT EXISTS call_logs (
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 )`).run();
 
+// ─── LEAD NOTES TABLE ─────────────────────────────────────────────────────────
+// Internal staff notes. Attached to a lead and/or a Google Calendar event id;
+// `source` records where it was written ('appointment' | 'call').
+db.exec(`
+  CREATE TABLE IF NOT EXISTS lead_notes (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    shop_id    TEXT NOT NULL,
+    lead_id    INTEGER,
+    event_id   TEXT,
+    body       TEXT NOT NULL,
+    author     TEXT,
+    source     TEXT DEFAULT 'appointment',
+    created_at TEXT DEFAULT (datetime('now'))
+  )
+`);
+db.exec(`CREATE INDEX IF NOT EXISTS idx_lead_notes_lead ON lead_notes (lead_id)`);
+db.exec(`CREATE INDEX IF NOT EXISTS idx_lead_notes_event ON lead_notes (event_id)`);
+
 // ─── SCHEDULED JOBS TABLE ─────────────────────────────────────────────────────
 db.exec(`
   CREATE TABLE IF NOT EXISTS scheduled_jobs (

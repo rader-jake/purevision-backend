@@ -437,6 +437,58 @@ router.post('/admin/cancel-appointment', async (req, res) => {
 });
 
 
+// ─── INTERNAL NOTES (appointments + Call Mode) ───────────────────────────────
+// created_at is stored as UTC "YYYY-MM-DD HH:MM:SS"; hand it to the browser as ISO.
+const shapeNote = (n) => ({ ...n, created_at: n.created_at.replace(' ', 'T') + 'Z' });
+
+router.get('/admin/notes', (req, res) => {
+  const { secret, lead_id, event_id } = req.query;
+  if (secret !== process.env.MANUAL_ENTRY_SECRET) return res.status(403).json({ error: 'Unauthorized' });
+  if (!lead_id && !event_id) return res.status(400).json({ error: 'lead_id or event_id required' });
+
+  // A customer's notes follow them across appointments and Call Mode
+  const notes = db.prepare(`
+    SELECT id, lead_id, event_id, body, author, source, created_at
+    FROM lead_notes
+    WHERE shop_id = ? AND (lead_id = ? OR event_id = ?)
+    ORDER BY id DESC
+  `).all(JORDY_SHOP, lead_id ? Number(lead_id) : null, event_id || null);
+
+  res.json({ notes: notes.map(shapeNote) });
+});
+
+router.post('/admin/add-note', (req, res) => {
+  const { secret, lead_id, event_id, body, author, source } = req.body;
+  if (secret !== process.env.MANUAL_ENTRY_SECRET) return res.status(403).json({ error: 'Unauthorized' });
+
+  const text = String(body || '').trim();
+  if (!text) return res.status(400).json({ error: 'Note is empty' });
+  if (text.length > 2000) return res.status(400).json({ error: 'Note is too long (2000 characters max)' });
+  if (!lead_id && !event_id) return res.status(400).json({ error: 'lead_id or event_id required' });
+  if (lead_id && !db.prepare(`SELECT 1 FROM leads WHERE id = ? AND shop_id = ?`).get(lead_id, JORDY_SHOP)) {
+    return res.status(404).json({ error: 'Lead not found' });
+  }
+
+  const info = db.prepare(`
+    INSERT INTO lead_notes (shop_id, lead_id, event_id, body, author, source)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `).run(JORDY_SHOP, lead_id ? Number(lead_id) : null, event_id || null, text,
+         String(author || 'Staff').slice(0, 60), source === 'call' ? 'call' : 'appointment');
+
+  const note = db.prepare(`SELECT id, lead_id, event_id, body, author, source, created_at FROM lead_notes WHERE id = ?`).get(info.lastInsertRowid);
+  console.log(`[Notes] Added note ${note.id} (lead ${lead_id ?? '-'}, event ${event_id ?? '-'})`);
+  res.json({ success: true, note: shapeNote(note) });
+});
+
+router.post('/admin/delete-note', (req, res) => {
+  const { secret, note_id } = req.body;
+  if (secret !== process.env.MANUAL_ENTRY_SECRET) return res.status(403).json({ error: 'Unauthorized' });
+
+  const result = db.prepare(`DELETE FROM lead_notes WHERE id = ? AND shop_id = ?`).run(note_id, JORDY_SHOP);
+  if (!result.changes) return res.status(404).json({ error: 'Note not found' });
+  res.json({ success: true });
+});
+
 // CALENDAR INTEGRATION FOR JORDY ^^^
 
 // ─── ROUTE: SEND MANUAL MESSAGE ───────────────────────────────────────────────
