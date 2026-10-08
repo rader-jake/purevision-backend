@@ -78,3 +78,45 @@ export async function bookGoogleCalendarEvent(lead) {
   console.log(`[Calendar] Event created: ${event.data.htmlLink}`);
   return event.data;
 }
+
+// ─── DST-AWARE CENTRAL TIME HELPERS ───────────────────────────────────────────
+// Turns a Central wall-clock date + hour into a real Date. The older routes
+// hardcode "-05:00" (CDT), which is an hour off once DST ends — use this for
+// anything new.
+export function centralToDate(dateStr, hour = 0) {
+  const [y, m, d] = dateStr.split("-").map(Number);
+  const wanted = Date.UTC(y, m - 1, d, hour);
+  let guess = wanted;
+  for (let i = 0; i < 2; i++) {
+    const parts = new Intl.DateTimeFormat("en-US", {
+      timeZone: "America/Chicago", hourCycle: "h23",
+      year: "numeric", month: "numeric", day: "numeric", hour: "numeric", minute: "numeric", second: "numeric",
+    }).formatToParts(new Date(guess)).reduce((o, p) => (o[p.type] = Number(p.value), o), {});
+    const shown = Date.UTC(parts.year, parts.month - 1, parts.day, parts.hour, parts.minute, parts.second);
+    guess += wanted - shown;
+  }
+  return new Date(guess);
+}
+
+// ─── APPOINTMENT DESCRIPTION FORMAT ───────────────────────────────────────────
+// "Vehicle: …\nService: …\nPrice: …\nPhone: …\nNotes: …" (Notes is last, may span lines).
+// Events made by the AI booking flow use "Special:" instead of "Service:".
+export function buildAppointmentDescription({ vehicle, service, price, phone, notes }) {
+  return `Vehicle: ${vehicle || ""}\nService: ${service || ""}\nPrice: ${price || ""}\nPhone: ${phone || ""}\nNotes: ${notes || ""}`;
+}
+
+export function parseAppointmentDescription(description) {
+  const out = { vehicle: "", service: "", price: "", phone: "", notes: "" };
+  const lines = String(description || "").split("\n");
+  for (let i = 0; i < lines.length; i++) {
+    const m = lines[i].match(/^(Vehicle|Service|Special|Price|Phone|Notes):\s?(.*)$/);
+    if (!m) continue;
+    const key = m[1].toLowerCase();
+    if (key === "notes") {
+      out.notes = [m[2], ...lines.slice(i + 1)].join("\n").trim();
+      break;
+    }
+    out[key === "special" ? "service" : key] = m[2].trim();
+  }
+  return out;
+}
