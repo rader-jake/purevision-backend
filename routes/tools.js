@@ -308,6 +308,10 @@ router.post("/tools/create-deposit-link", async (req, res) => {
   const args              = raw.args || raw;
   const lead_phone        = args.lead_phone;
   const appointment_time  = args.appointment_time;
+  // Ad-attribution data from the booking page, used later for the Meta Purchase event
+  const { fbp, fbc, source_url } = args;
+  const clientIp = (req.headers["x-forwarded-for"] || "").split(",")[0].trim() || req.socket?.remoteAddress || null;
+  const userAgent = req.headers["user-agent"] || null;
 
   if (!lead_phone || !appointment_time) {
     return res.json({
@@ -326,9 +330,10 @@ router.post("/tools/create-deposit-link", async (req, res) => {
     if (lead) {
       db.prepare(`
         UPDATE leads
-        SET deposit_sent = 1, square_order_id = ?, pending_appointment_time = ?
+        SET deposit_sent = 1, square_order_id = ?, pending_appointment_time = ?,
+            meta_fbp = ?, meta_fbc = ?, meta_user_agent = ?, meta_ip = ?, meta_source_url = ?
         WHERE id = ?
-      `).run(orderId, appointment_time, lead.id);
+      `).run(orderId, appointment_time, fbp || null, fbc || null, userAgent, clientIp, source_url || null, lead.id);
     } else {
       console.warn(`[Create Deposit Link Tool] No lead found for phone ${lead_phone} — deposit link created but not linked to a lead`);
     }

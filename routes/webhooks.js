@@ -6,6 +6,7 @@ import { sendSMS, sendSMSWithPhoto, handleOwnerPingTag } from "../services/sms.j
 import { photoMap } from "../services/photo-map.js";
 import { scheduleFollowUpJobs, scheduleColdNudgeJobs, cancelAllJobsForLead } from "../workers/follow-ups.js";
 import { bookGoogleCalendarEvent } from "../services/calendar.js";
+import { sendMetaDepositPurchase } from "../services/meta.js";
 import { runSMSAgent } from "../agents/sms-agent.js";
 import { triggerRetellCall } from "./retell.js";
 
@@ -124,6 +125,12 @@ router.post("/webhooks/square", async (req, res) => {
 
     // Cancel any follow-up jobs since they're confirmed
     cancelAllJobsForLead(lead.id);
+
+    // Tell Meta a real deposit was paid (booking-page leads only — they carry the ad click data).
+    // Fire-and-forget: never let this delay or break the confirmation.
+    if (lead.meta_source_url) {
+      sendMetaDepositPurchase(lead).catch(e => console.error("[Meta CAPI] Unexpected:", e.message));
+    }
 
     console.log(`[Square Webhook] Lead ${lead.id} — ${lead.lead_name} CONFIRMED! Deposit paid.`);
   }

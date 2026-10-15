@@ -103,3 +103,8 @@ try {
 try {
   db.exec(`ALTER TABLE leads ADD COLUMN pending_appointment_time TEXT`);
 } catch(e) { /* already exists */ }
+for (const col of ["meta_fbp", "meta_fbc", "meta_user_agent", "meta_ip", "meta_source_url"]) {
+  try {
+    db.exec(`ALTER TABLE leads ADD COLUMN ${col} TEXT`);
+  } catch(e) { /* already exists */ }
+}
