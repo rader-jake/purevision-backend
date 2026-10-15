@@ -592,7 +592,7 @@ router.post('/webhook/sms/inbound',
 
       console.log(`[SMS Inbound] From: ${from} — "${content}"`);
 
-      const lead = db.prepare(`
+      let lead = db.prepare(`
         SELECT * FROM leads
         WHERE replace(replace(replace(lead_phone, '+', ''), '-', ''), ' ', '')
           LIKE '%' || replace(replace(replace(?, '+', ''), '-', ''), ' ', '') || '%'
