@@ -3,6 +3,7 @@ import { sendSMS, sendSMSWithPhoto } from "../services/sms.js";
 import { photoMap } from "../services/photo-map.js";
 import { isWithinSendingWindow, minutesUntil8AM } from "../services/calendar.js";
 import { buildFollowUpMessage } from "./follow-ups.js";
+import { SHOP_CONFIGS } from "../config/shops.js";
 
 // ─── BACKGROUND JOB WORKER ───────────────────────────────────────────────────
 export async function processScheduledJobs() {
@@ -31,7 +32,7 @@ export async function processScheduledJobs() {
       }
 
       // Skip if lead is in a terminal state
-      const skipStatuses = ['booked', 'dead', 'mia', 'opted_out'];
+      const skipStatuses = ['booked', 'dead', 'mia', 'opted_out', 'claimed'];
       if (skipStatuses.includes(lead.call_status)) {
         db.prepare(`UPDATE scheduled_jobs SET status = 'cancelled' WHERE id = ?`).run(job.id);
         console.log(`[Worker] Skipping job ${job.id} — lead ${lead.lead_name} is ${lead.call_status}`);
@@ -79,8 +80,9 @@ export async function processScheduledJobs() {
       // already handled above).
 
       // Check sending window — if outside, reschedule for 8AM
-      if (!isWithinSendingWindow()) {
-        const minsUntil8 = minutesUntil8AM();
+      const tz = SHOP_CONFIGS[lead.shop_id]?.timezone; // undefined → Central
+      if (!isWithinSendingWindow(tz)) {
+        const minsUntil8 = minutesUntil8AM(tz);
         db.prepare(`
           UPDATE scheduled_jobs
           SET send_at = datetime('now', '+' || ? || ' minutes'), status = 'pending'

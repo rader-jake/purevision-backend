@@ -71,6 +71,9 @@ export function getSMSTools(lead) {
   if (lead.shop_id === 'pro-auto-designs') {
     return []; // No calendar tools for demo — just conversation
   }
+  if (lead.shop_id === 'integrity-claims') {
+    return []; // Conversation only — an adjuster confirms inspections personally
+  }
 
   if (lead.shop_id === 'shopdesk-demo') {
     return []; // No tools for demo agent

@@ -4,6 +4,7 @@ import { buildShopdeskDemoPrompt } from "./shopdesk-demo.js";
 import { buildApexTintingPrompt } from "./apex-tinting.js";
 import { buildPureVisionPrompt } from "./pure-vision.js";
 import { buildProAutoDesignsPrompt } from "./pro-auto-designs.js";
+import { buildIntegrityClaimsPrompt } from "./integrity-claims.js";
 
 // ─── SMS SYSTEM PROMPT ────────────────────────────────────────────────────────
 export function buildSMSSystemPrompt(lead) {
@@ -25,6 +26,10 @@ export function buildSMSSystemPrompt(lead) {
 
   if (lead.shop_id === 'pro-auto-designs') {
     return buildProAutoDesignsPrompt(lead);
+  }
+
+  if (lead.shop_id === 'integrity-claims') {
+    return buildIntegrityClaimsPrompt(lead);
   }
 
   return buildPureVisionPrompt(lead);

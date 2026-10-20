@@ -9,6 +9,8 @@ import { bookGoogleCalendarEvent } from "../services/calendar.js";
 import { sendMetaDepositPurchase } from "../services/meta.js";
 import { runSMSAgent } from "../agents/sms-agent.js";
 import { triggerRetellCall } from "./retell.js";
+import { INTEGRITY_SHOP, buildOpener, detectInboundIntent, last10, normalizePhone } from "../services/fire-text.js";
+import { markDeadIfExhausted } from "../services/fire-leads.js";
 
 const router = express.Router();
 
@@ -17,6 +19,9 @@ function mapLead(payload, fieldMapping) {
   // lead_special_override, mapped via fieldMapping.leadSpecial) over guessing
   // from the form name — it's exact instead of a substring match.
   let leadSpecial = fieldMapping.leadSpecial ? payload[fieldMapping.leadSpecial] : null;
+
+  // Fire leads: never fall back to a tint special
+  if (!leadSpecial && fieldMapping.leadSpecial === "incident_info") leadSpecial = "Fire incident";
 
   if (!leadSpecial) {
     leadSpecial = "Ceramic Special";
@@ -198,7 +203,9 @@ router.post("/webhook/ghl/:shopId", async (req, res) => {
         `${lead.leadName}! Got your request about your ${lead.leadVehicle} — still thinking about getting it tinted?`,
         `${lead.leadName}! Thanks for your interest in tinting your ${lead.leadVehicle} — how can I help you out?`,
       ];
-      let msg = openers[Math.floor(Math.random() * openers.length)];
+      let msg = shopId === INTEGRITY_SHOP
+        ? buildOpener(lead.leadName, lead.leadVehicle)
+        : openers[Math.floor(Math.random() * openers.length)];
       const smsResult = await sendSMS(lead.leadPhone, msg);
       if (smsResult?.success !== false) {
         db.prepare(`INSERT INTO sms_messages (lead_id, direction, body) VALUES (?, ?, ?)`)
@@ -486,6 +493,11 @@ router.post("/webhook/sms-only/:shopId", async (req, res) => {
   const leadId = result.lastInsertRowid;
   res.status(200).json({ received: true, leadId });
 
+  // Fire leads track every number they could be reached on
+  if (shopId === INTEGRITY_SHOP && normalizePhone(lead.leadPhone)) {
+    db.prepare(`INSERT INTO lead_phones (lead_id, phone) VALUES (?, ?)`).run(leadId, normalizePhone(lead.leadPhone));
+  }
+
   // If lead came from booking page, skip the opening message — they're already booking
     if (req.body.source === 'booking_page') {
     console.log(`[${shopId}] Lead from booking page — skipping opening message`);
@@ -517,6 +529,8 @@ router.post("/webhook/sms-only/:shopId", async (req, res) => {
       await sendSMSWithPhoto(lead.leadPhone, '', photoMap['completed_pool']);
     } else if (shopId === 'apex-window-tinting') {
       msg = `Hey ${lead.leadName}! Thanks for reaching out to Apex Window Tinting. You inquired about our ${lead.leadSpecial || 'Summer Special'} for your ${lead.leadVehicle || 'vehicle'} — were you still interested in getting that done?`;
+    } else if (shopId === INTEGRITY_SHOP) {
+      msg = buildOpener(lead.leadName, lead.leadVehicle);
     } else if (shopId === 'pro-auto-designs') {
       const veh = lead.leadVehicle && lead.leadVehicle !== 'your vehicle' ? `your ${lead.leadVehicle}` : 'your vehicle';
       const svc = {
@@ -537,6 +551,10 @@ router.post("/webhook/sms-only/:shopId", async (req, res) => {
     if (smsResult?.success !== false) {
       db.prepare(`INSERT INTO sms_messages (lead_id, direction, body) VALUES (?, ?, ?)`)
         .run(leadId, 'outbound', msg);
+      if (shopId === INTEGRITY_SHOP) {
+        db.prepare(`UPDATE lead_phones SET status = 'sent' WHERE lead_id = ?`).run(leadId);
+        db.prepare(`UPDATE leads SET call_status = 'sms_fallback' WHERE id = ?`).run(leadId);
+      }
 
       // Only schedule follow-ups for real leads — not demo
       if (shopId !== 'shopdesk-demo') {
@@ -599,6 +617,16 @@ router.post('/webhook/sms/inbound',
         ORDER BY created_at DESC LIMIT 1
       `).get(from);
 
+      // Fire leads have several numbers; a reply may come from one that isn't the lead's current one
+      if (!lead && last10(from).length === 10) {
+        const viaPhones = db.prepare(`
+          SELECT l.* FROM lead_phones p JOIN leads l ON l.id = p.lead_id
+          WHERE p.phone LIKE '%' || ? || '%'
+          ORDER BY (p.status = 'sent') DESC, p.id DESC LIMIT 1
+        `).get(last10(from));
+        if (viaPhones) lead = viaPhones;
+      }
+
       if (!lead) {
         console.log('[SMS] New inbound from unknown number:', from);
 
@@ -623,6 +651,48 @@ router.post('/webhook/sms/inbound',
       if (recentDupe) {
         console.log(`[SMS] Duplicate inbound from ${lead.lead_name} — skipping`);
         return;
+      }
+
+      // ── Multi-number leads: this number works, so stop trying the others ──
+      const matchedPhone = db.prepare(`
+        SELECT * FROM lead_phones
+        WHERE lead_id = ? AND phone LIKE '%' || ? || '%'
+        LIMIT 1
+      `).get(lead.id, last10(from));
+
+      if (matchedPhone) {
+        if (matchedPhone.status !== 'replied') {
+          db.prepare('UPDATE lead_phones SET status = ? WHERE id = ?').run('replied', matchedPhone.id);
+        }
+        // Keep the conversation (and any follow-ups) on the number that answered
+        db.prepare('UPDATE leads SET lead_phone = ? WHERE id = ?').run(matchedPhone.phone, lead.id);
+        // Nothing else is "pending" for this lead: no more numbers get fired, follow-ups for the old number stop
+        cancelAllJobsForLead(lead.id);
+      }
+
+      // ── Fire-damage homeowners: honor opt-outs and wrong numbers immediately ──
+      if (lead.shop_id === INTEGRITY_SHOP) {
+        const intent = detectInboundIntent(content);
+        if (intent === 'stop' || intent === 'wrong_number') {
+          db.prepare(`INSERT INTO sms_messages (lead_id, direction, body) VALUES (?, ?, ?)`)
+            .run(lead.id, 'inbound', content);
+          if (intent === 'stop') {
+            db.prepare(`UPDATE leads SET call_status = 'opted_out' WHERE id = ?`).run(lead.id);
+            cancelAllJobsForLead(lead.id);
+            console.log(`[SMS] ${lead.lead_name} opted out — no reply sent, lead closed`);
+          } else {
+            if (matchedPhone) db.prepare('UPDATE lead_phones SET status = ? WHERE id = ?').run('wrong_number', matchedPhone.id);
+            markDeadIfExhausted(lead.id);
+            console.log(`[SMS] ${lead.lead_name} — wrong number (${from}), no reply sent`);
+          }
+          return;
+        }
+        if (intent === 'not_interested') {
+          // The AI answers kindly once below; marking the lead dead stops every follow-up
+          db.prepare(`UPDATE leads SET call_status = 'dead' WHERE id = ?`).run(lead.id);
+          cancelAllJobsForLead(lead.id);
+          lead = { ...lead, call_status: 'dead' };
+        }
       }
 
       // If manual mode is on, just store the inbound message — don't AI respond
@@ -709,7 +779,7 @@ router.post('/webhook/sms/inbound',
         // Schedule cold nudge — but only if lead isn't already booked/confirmed
         if (lead.shop_id !== 'shopdesk-demo') {
           const freshLead = db.prepare(`SELECT call_status FROM leads WHERE id = ?`).get(lead.id);
-          const skipStatuses = ['booked', 'confirmed', 'dead', 'opted_out', 'mia'];
+          const skipStatuses = ['booked', 'confirmed', 'dead', 'opted_out', 'mia', 'claimed'];
           if (!skipStatuses.includes(freshLead?.call_status)) {
             scheduleColdNudgeJobs(lead.id, lead.shop_id);
           } else {

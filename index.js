@@ -43,6 +43,9 @@ app.use(retellRouter);
 import adminRouter from "./routes/admin.js";
 app.use(adminRouter);
 
+import fireLeadsRouter from "./routes/fire-leads.js";
+app.use(fireLeadsRouter);
+
 // routes/social.js is built but not mounted — social-post.js's import stays
 // commented out above until it's verified working (bug fix #2).
 // import socialRouter from "./routes/social.js";

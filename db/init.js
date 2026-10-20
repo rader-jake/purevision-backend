@@ -56,6 +56,38 @@ db.prepare(`CREATE TABLE IF NOT EXISTS call_logs (
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 )`).run();
 
+// ─── FIRE LEADS (Integrity Claims) ────────────────────────────────────────────
+// One lead can carry up to ~14 phone numbers; we try them one at a time.
+// status: untried | sent | replied | wrong_number | no_response
+db.exec(`
+  CREATE TABLE IF NOT EXISTS lead_phones (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    lead_id    INTEGER NOT NULL,
+    phone      TEXT NOT NULL,
+    status     TEXT DEFAULT 'untried',
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )
+`);
+db.exec(`CREATE INDEX IF NOT EXISTS idx_lead_phones_lead ON lead_phones (lead_id)`);
+db.exec(`CREATE INDEX IF NOT EXISTS idx_lead_phones_phone ON lead_phones (phone)`);
+
+// Spreadsheet fields that don't fit the generic leads columns.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS fire_leads (
+    lead_id        INTEGER PRIMARY KEY,
+    incident       TEXT,
+    incident_date  TEXT,
+    property_type  TEXT,
+    address        TEXT,
+    city           TEXT,
+    county         TEXT,
+    email          TEXT,
+    notes          TEXT,
+    created_at     DATETIME DEFAULT CURRENT_TIMESTAMP
+  )
+`);
+db.exec(`CREATE INDEX IF NOT EXISTS idx_fire_leads_incident ON fire_leads (incident)`);
+
 // ─── LEAD NOTES TABLE ─────────────────────────────────────────────────────────
 // Internal staff notes. Attached to a lead and/or a Google Calendar event id;
 // `source` records where it was written ('appointment' | 'call').

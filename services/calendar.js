@@ -33,19 +33,22 @@ export function getCentralHour(date) {
   );
 }
 
-export function isWithinSendingWindow() {
-  const hour = getCentralHour(new Date());
+// Sending window is 8 AM – 8 PM in the shop's timezone (Central unless a shop says otherwise).
+export function isWithinSendingWindow(tz = "America/Chicago") {
+  const hour = parseInt(
+    new Date().toLocaleString("en-US", { hour: "numeric", hour12: false, timeZone: tz })
+  ) % 24;
   return hour >= 8 && hour < 20;
 }
 
-export function minutesUntil8AM() {
+export function minutesUntil8AM(tz = "America/Chicago") {
   const now = new Date();
-  const central = new Date(now.toLocaleString('en-US', { timeZone: 'America/Chicago' }));
-  const next8AM = new Date(central);
+  const local = new Date(now.toLocaleString('en-US', { timeZone: tz }));
+  const next8AM = new Date(local);
   next8AM.setHours(8, 0, 0, 0);
-  if (central.getHours() >= 8 && central.getHours() < 20) return 0;
-  if (central.getHours() >= 20) next8AM.setDate(next8AM.getDate() + 1);
-  return Math.ceil((next8AM - central) / 60000);
+  if (local.getHours() >= 8 && local.getHours() < 20) return 0;
+  if (local.getHours() >= 20) next8AM.setDate(next8AM.getDate() + 1);
+  return Math.ceil((next8AM - local) / 60000);
 }
 
 export async function bookGoogleCalendarEvent(lead) {

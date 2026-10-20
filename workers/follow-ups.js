@@ -1,9 +1,18 @@
 import { db } from "../db/connection.js";
+import { INTEGRITY_SHOP, leadFirstName } from "../services/fire-text.js";
 
 // ─── FOLLOW-UP MESSAGE BUILDER ────────────────────────────────────────────────
 export function buildFollowUpMessage(lead, jobType, attempt) {
   const name = lead.lead_name;
   const shopId = lead.shop_id;
+
+  // Fire-damage homeowners: one gentle follow-up at most (see scheduleColdNudgeJobs), never a sales nudge.
+  if (shopId === INTEGRITY_SHOP) {
+    const first = leadFirstName(name);
+    return jobType === 'cold_nudge'
+      ? `Hi ${first}, just checking in — no rush at all. If any questions come up about your claim, I'm happy to help whenever you're ready.`
+      : `Hi ${first}, just a gentle follow-up — I know this is a difficult time. If you'd ever like help with your insurance claim, I'm here at no cost to start. Wishing you and your family all the best.`;
+  }
 
   if (jobType === 'follow_up') {
     // Never replied at all
@@ -60,18 +69,16 @@ export function scheduleColdNudgeJobs(leadId, shopId) {
     WHERE lead_id = ? AND job_type = 'cold_nudge' AND status = 'pending'
   `).run(leadId);
 
-  // Schedule fresh cold nudges: 24h and 48h from now
-  db.prepare(`
-    INSERT INTO scheduled_jobs (lead_id, shop_id, job_type, attempt, send_at)
-    VALUES (?, ?, 'cold_nudge', 1, datetime('now', '+24 hours'))
-  `).run(leadId, shopId);
+  // Schedule fresh cold nudges: 24h and 48h from now. Fire-damage leads get a single, later one.
+  const nudges = shopId === INTEGRITY_SHOP ? [[1, '+48 hours']] : [[1, '+24 hours'], [2, '+48 hours']];
+  for (const [attempt, offset] of nudges) {
+    db.prepare(`
+      INSERT INTO scheduled_jobs (lead_id, shop_id, job_type, attempt, send_at)
+      VALUES (?, ?, 'cold_nudge', ?, datetime('now', ?))
+    `).run(leadId, shopId, attempt, offset);
+  }
 
-  db.prepare(`
-    INSERT INTO scheduled_jobs (lead_id, shop_id, job_type, attempt, send_at)
-    VALUES (?, ?, 'cold_nudge', 2, datetime('now', '+48 hours'))
-  `).run(leadId, shopId);
-
-  console.log(`[Jobs] Scheduled 2 cold nudge jobs for lead ${leadId}`);
+  console.log(`[Jobs] Scheduled ${nudges.length} cold nudge job(s) for lead ${leadId}`);
 }
 
 export function cancelAllJobsForLead(leadId) {

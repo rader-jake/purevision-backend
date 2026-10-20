@@ -519,13 +519,13 @@ router.post('/admin/update-lead-status', (req, res) => {
   if (secret !== process.env.MANUAL_ENTRY_SECRET) {
     return res.status(403).json({ error: 'Unauthorized' });
   }
-  const validStatuses = ['pending', 'booked', 'confirmed', 'dead', 'mia', 'opted_out', 'sms_fallback', 'completed', 'calling'];
+  const validStatuses = ['pending', 'booked', 'confirmed', 'dead', 'mia', 'opted_out', 'sms_fallback', 'completed', 'calling', 'claimed'];
   if (!validStatuses.includes(status)) {
     return res.status(400).json({ error: 'Invalid status' });
   }
   db.prepare(`UPDATE leads SET call_status = ? WHERE id = ?`).run(status, lead_id);
   // If killing a lead, cancel all their pending jobs
-  if (status === 'dead' || status === 'opted_out') {
+  if (status === 'dead' || status === 'opted_out' || status === 'claimed') {
     cancelAllJobsForLead(lead_id);
   }
   console.log(`[Admin] Lead ${lead_id} status updated to ${status}`);

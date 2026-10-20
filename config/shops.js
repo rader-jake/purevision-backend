@@ -63,6 +63,22 @@ export const SHOP_CONFIGS = {
     },
   },
 
+  // Public insurance adjuster — leads come from a purchased fire-incident list (not ads),
+  // each with several phone numbers (see routes/fire-leads.js + lead_phones table).
+  "integrity-claims": {
+    shopId:     "integrity-claims",
+    shopName:   "Integrity Claims",
+    smsOnly:    true,
+    retellAgentId: null,
+    timezone:   "America/New_York",   // sending window + date table; other shops default to Central
+    fieldMapping: {
+      leadName:    "first_name",
+      leadPhone:   "phone",
+      leadVehicle: "address",         // property address
+      leadSpecial: "incident_info",   // e.g. "House fire — 10-20-26"
+    },
+  },
+
   "shopdesk-demo": {
     shopId:     "shopdesk-demo",
     shopName:   "ShopDesk AI",

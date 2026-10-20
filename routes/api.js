@@ -159,6 +159,21 @@ router.get('/api/conversations/pro-auto-designs', async (req, res) => {
   res.json(messages);
 });
 
+// INTEGRITY CLAIMS SMS CONVERSATIONS
+
+router.get('/api/conversations/integrity-claims', async (req, res) => {
+  const { password } = req.query;
+  if (password !== 'integrity2026') return res.status(401).json({ error: 'Unauthorized' });
+  const leads = db.prepare('SELECT * FROM leads WHERE shop_id = ?').all('integrity-claims');
+  const leadIds = leads.map(l => l.id);
+  if (!leadIds.length) return res.json([]);
+  const placeholders = leadIds.map(() => '?').join(',');
+  const messages = db.prepare(`
+    SELECT * FROM sms_messages WHERE lead_id IN (${placeholders}) ORDER BY created_at ASC
+  `).all(...leadIds);
+  res.json(messages);
+});
+
 // ─── LING DASHBOARD ───────────────────────────────────────────────────────────
 router.get('/api/conversations/:shopId', async (req, res) => {
   const { password } = req.query;
