@@ -2,7 +2,6 @@ import "dotenv/config";
 import express from "express";
 import cors from "cors";
 // import { runSocialPost, postToInstagram, postToFacebook } from './social-post.js';
-// What happened to social-post.js? 
 
 const app = express();
 import "./db/init.js";
