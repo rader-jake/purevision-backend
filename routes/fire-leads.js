@@ -3,7 +3,7 @@ import { db } from "../db/connection.js";
 import { cancelAllJobsForLead } from "../workers/follow-ups.js";
 import { INTEGRITY_SHOP, normalizePhone } from "../services/fire-text.js";
 import {
-  getPhones, sendOutreach, markDeadIfExhausted, insideSendingHours, OUTSIDE_HOURS_MESSAGE,
+  getPhones, sendOutreach, markDeadIfExhausted, repointLeadPhone, insideSendingHours, OUTSIDE_HOURS_MESSAGE,
 } from "../services/fire-leads.js";
 
 // Integrity Claims — public-adjuster fire leads, several phone numbers per lead.
@@ -202,6 +202,7 @@ router.post("/admin/mark-phone-status", (req, res) => {
   db.prepare(`UPDATE lead_phones SET status = ? WHERE id = ?`).run(status, phone.id);
   if (status === "replied") db.prepare(`UPDATE leads SET lead_phone = ? WHERE id = ?`).run(phone.phone, phone.lead_id);
 
+  if (status === "wrong_number") repointLeadPhone(phone.lead_id);
   const leadDead = (status === "wrong_number" || status === "no_response") && markDeadIfExhausted(phone.lead_id);
   res.json({ success: true, lead_dead: leadDead, remaining_numbers: getPhones(phone.lead_id).filter(p => p.status === "untried").length });
 });

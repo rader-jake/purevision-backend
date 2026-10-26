@@ -79,3 +79,16 @@ export function markDeadIfExhausted(leadId) {
   console.log(`[Fire] Lead ${leadId} — every number exhausted, marked dead`);
   return true;
 }
+
+/**
+ * After a number turns out to be wrong, move the lead's "current" number onto one that might still work
+ * (a number we've texted, else one we haven't tried yet).
+ */
+export function repointLeadPhone(leadId) {
+  const phones = getPhones(leadId);
+  const lead = db.prepare(`SELECT lead_phone FROM leads WHERE id = ?`).get(leadId);
+  const current = phones.find(p => p.phone === lead?.lead_phone);
+  if (current && current.status !== "wrong_number") return;
+  const next = phones.find(p => p.status === "replied") || phones.find(p => p.status === "sent") || phones.find(p => p.status === "untried");
+  if (next) db.prepare(`UPDATE leads SET lead_phone = ? WHERE id = ?`).run(next.phone, leadId);
+}

@@ -10,7 +10,7 @@ import { sendMetaDepositPurchase } from "../services/meta.js";
 import { runSMSAgent } from "../agents/sms-agent.js";
 import { triggerRetellCall } from "./retell.js";
 import { INTEGRITY_SHOP, buildOpener, detectInboundIntent, last10, normalizePhone } from "../services/fire-text.js";
-import { markDeadIfExhausted } from "../services/fire-leads.js";
+import { markDeadIfExhausted, repointLeadPhone } from "../services/fire-leads.js";
 
 const router = express.Router();
 
@@ -566,6 +566,36 @@ router.post("/webhook/sms-only/:shopId", async (req, res) => {
   }, delay);
 });
 
+// ─── INBOUND: WHICH LEAD IS THIS REPLY FOR? ─────────────────────────────────
+// The same phone number can belong to several leads (a tint lead from an earlier test, an
+// Integrity lead with many numbers, ...). The reply belongs to the conversation we texted
+// MOST RECENTLY — otherwise an old lead can swallow a reply meant for a newer one and the
+// wrong shop's AI answers. Fire leads are also matched on any of their other numbers.
+function findLeadForInbound(from) {
+  const digits = last10(from);
+  const byLeadPhone = db.prepare(`
+    SELECT * FROM leads
+    WHERE replace(replace(replace(lead_phone, '+', ''), '-', ''), ' ', '')
+      LIKE '%' || replace(replace(replace(?, '+', ''), '-', ''), ' ', '') || '%'
+    ORDER BY created_at DESC LIMIT 10
+  `).all(from);
+  const viaPhones = digits.length === 10
+    ? db.prepare(`
+        SELECT l.* FROM lead_phones p JOIN leads l ON l.id = p.lead_id
+        WHERE p.phone LIKE '%' || ? || '%' LIMIT 10
+      `).all(digits)
+    : [];
+
+  const candidates = new Map();
+  for (const l of [...byLeadPhone, ...viaPhones]) candidates.set(l.id, l);
+  if (candidates.size <= 1) return [...candidates.values()][0] ?? null;
+
+  const lastOutbound = db.prepare(`SELECT COALESCE(MAX(id), 0) AS id FROM sms_messages WHERE lead_id = ? AND direction = 'outbound'`);
+  return [...candidates.values()]
+    .map(l => ({ l, out: lastOutbound.get(l.id).id }))
+    .sort((a, b) => b.out - a.out || String(b.l.created_at).localeCompare(String(a.l.created_at)))[0].l;
+}
+
 // ─── INBOUND SMS WEBHOOK ──────────────────────────────────────────────────────
 router.post('/webhook/sms/inbound',
   express.raw({ type: 'application/json' }),
@@ -610,22 +640,7 @@ router.post('/webhook/sms/inbound',
 
       console.log(`[SMS Inbound] From: ${from} — "${content}"`);
 
-      let lead = db.prepare(`
-        SELECT * FROM leads
-        WHERE replace(replace(replace(lead_phone, '+', ''), '-', ''), ' ', '')
-          LIKE '%' || replace(replace(replace(?, '+', ''), '-', ''), ' ', '') || '%'
-        ORDER BY created_at DESC LIMIT 1
-      `).get(from);
-
-      // Fire leads have several numbers; a reply may come from one that isn't the lead's current one
-      if (!lead && last10(from).length === 10) {
-        const viaPhones = db.prepare(`
-          SELECT l.* FROM lead_phones p JOIN leads l ON l.id = p.lead_id
-          WHERE p.phone LIKE '%' || ? || '%'
-          ORDER BY (p.status = 'sent') DESC, p.id DESC LIMIT 1
-        `).get(last10(from));
-        if (viaPhones) lead = viaPhones;
-      }
+      let lead = findLeadForInbound(from);
 
       if (!lead) {
         console.log('[SMS] New inbound from unknown number:', from);
@@ -653,46 +668,48 @@ router.post('/webhook/sms/inbound',
         return;
       }
 
-      // ── Multi-number leads: this number works, so stop trying the others ──
       const matchedPhone = db.prepare(`
         SELECT * FROM lead_phones
         WHERE lead_id = ? AND phone LIKE '%' || ? || '%'
         LIMIT 1
       `).get(lead.id, last10(from));
+      const intent = lead.shop_id === INTEGRITY_SHOP ? detectInboundIntent(content) : null;
 
+      // ── "Wrong number": that number is NOT the homeowner — it didn't "reply", try another ──
+      if (intent === 'wrong_number') {
+        db.prepare(`INSERT INTO sms_messages (lead_id, direction, body) VALUES (?, ?, ?)`)
+          .run(lead.id, 'inbound', content);
+        if (matchedPhone) db.prepare('UPDATE lead_phones SET status = ? WHERE id = ?').run('wrong_number', matchedPhone.id);
+        repointLeadPhone(lead.id);
+        markDeadIfExhausted(lead.id);
+        console.log(`[SMS] ${lead.lead_name} — wrong number (${from}), no reply sent`);
+        return;
+      }
+
+      // ── Multi-number leads: this number works, so stop trying the others ──
       if (matchedPhone) {
         if (matchedPhone.status !== 'replied') {
           db.prepare('UPDATE lead_phones SET status = ? WHERE id = ?').run('replied', matchedPhone.id);
         }
         // Keep the conversation (and any follow-ups) on the number that answered
         db.prepare('UPDATE leads SET lead_phone = ? WHERE id = ?').run(matchedPhone.phone, lead.id);
-        // Nothing else is "pending" for this lead: no more numbers get fired, follow-ups for the old number stop
         cancelAllJobsForLead(lead.id);
       }
 
-      // ── Fire-damage homeowners: honor opt-outs and wrong numbers immediately ──
-      if (lead.shop_id === INTEGRITY_SHOP) {
-        const intent = detectInboundIntent(content);
-        if (intent === 'stop' || intent === 'wrong_number') {
-          db.prepare(`INSERT INTO sms_messages (lead_id, direction, body) VALUES (?, ?, ?)`)
-            .run(lead.id, 'inbound', content);
-          if (intent === 'stop') {
-            db.prepare(`UPDATE leads SET call_status = 'opted_out' WHERE id = ?`).run(lead.id);
-            cancelAllJobsForLead(lead.id);
-            console.log(`[SMS] ${lead.lead_name} opted out — no reply sent, lead closed`);
-          } else {
-            if (matchedPhone) db.prepare('UPDATE lead_phones SET status = ? WHERE id = ?').run('wrong_number', matchedPhone.id);
-            markDeadIfExhausted(lead.id);
-            console.log(`[SMS] ${lead.lead_name} — wrong number (${from}), no reply sent`);
-          }
-          return;
-        }
-        if (intent === 'not_interested') {
-          // The AI answers kindly once below; marking the lead dead stops every follow-up
-          db.prepare(`UPDATE leads SET call_status = 'dead' WHERE id = ?`).run(lead.id);
-          cancelAllJobsForLead(lead.id);
-          lead = { ...lead, call_status: 'dead' };
-        }
+      // ── Fire-damage homeowners: honor opt-outs immediately; "not interested" gets one kind reply ──
+      if (intent === 'stop') {
+        db.prepare(`INSERT INTO sms_messages (lead_id, direction, body) VALUES (?, ?, ?)`)
+          .run(lead.id, 'inbound', content);
+        db.prepare(`UPDATE leads SET call_status = 'opted_out' WHERE id = ?`).run(lead.id);
+        cancelAllJobsForLead(lead.id);
+        console.log(`[SMS] ${lead.lead_name} opted out — no reply sent, lead closed`);
+        return;
+      }
+      if (intent === 'not_interested') {
+        // The AI answers kindly once below; marking the lead dead stops every follow-up
+        db.prepare(`UPDATE leads SET call_status = 'dead' WHERE id = ?`).run(lead.id);
+        cancelAllJobsForLead(lead.id);
+        lead = { ...lead, call_status: 'dead' };
       }
 
       // If manual mode is on, just store the inbound message — don't AI respond
@@ -795,5 +812,152 @@ router.post('/webhook/sms/inbound',
     }
   }
 );
+
+// ─── ROUTE: TWILIO INBOUND SMS ───────────────────────────────────────────────
+router.post('/webhook/twilio/inbound', express.urlencoded({ extended: false }), async (req, res) => {
+  // Twilio sends form-encoded: From, To, Body, MessageSid
+  const from = req.body.From;
+  const content = req.body.Body;
+
+  // Respond immediately with empty TwiML so Twilio doesn't retry
+  res.type('text/xml').send('<?xml version="1.0" encoding="UTF-8"?><Response></Response>');
+
+  if (!from || !content) return;
+
+  console.log(`[Twilio Inbound] From: ${from} — "${content}"`);
+
+  // Find the lead
+  let lead = db.prepare(`
+    SELECT * FROM leads
+    WHERE replace(replace(replace(lead_phone, '+', ''), '-', ''), ' ', '')
+      LIKE '%' || replace(replace(replace(?, '+', ''), '-', ''), ' ', '') || '%'
+    ORDER BY created_at DESC LIMIT 1
+  `).get(from);
+
+  if (!lead) {
+    console.log('[Twilio] New inbound from unknown number:', from);
+    const result = db.prepare(`
+      INSERT INTO leads (shop_id, lead_name, lead_phone, lead_vehicle, lead_special, call_status)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).run('pure-vision-tints', 'Caller', from, 'your vehicle', 'Inquiry', 'pending');
+    lead = db.prepare(`SELECT * FROM leads WHERE id = ?`).get(result.lastInsertRowid);
+    console.log(`[Twilio] Auto-created lead ${lead.id} for ${from}`);
+  }
+
+  // Dedup check
+  const recentDupe = db.prepare(`
+    SELECT id FROM sms_messages
+    WHERE lead_id = ? AND direction = 'inbound' AND body = ?
+    AND created_at > datetime('now', '-2 minutes')
+    LIMIT 1
+  `).get(lead.id, content);
+
+  if (recentDupe) {
+    console.log(`[Twilio] Duplicate inbound from ${lead.lead_name} — skipping`);
+    return;
+  }
+
+  // Check for lead_phones table (for insurance adjuster leads)
+  try {
+    const matchedPhone = db.prepare(`
+      SELECT * FROM lead_phones
+      WHERE lead_id = ? AND phone LIKE '%' || ? || '%'
+      LIMIT 1
+    `).get(lead.id, from.slice(-10));
+
+    if (matchedPhone && matchedPhone.status !== 'replied') {
+      db.prepare('UPDATE lead_phones SET status = ? WHERE id = ?')
+        .run('replied', matchedPhone.id);
+    }
+  } catch(e) { /* lead_phones table may not exist yet */ }
+
+  // Manual mode check
+  if (lead.manual_mode === 1) {
+    console.log(`[Twilio] Manual mode active for ${lead.lead_name} — storing only`);
+    db.prepare(`INSERT INTO sms_messages (lead_id, direction, body) VALUES (?, ?, ?)`)
+      .run(lead.id, 'inbound', content);
+    return;
+  }
+
+  // Cancel non-responsive follow-ups
+  db.prepare(`
+    UPDATE scheduled_jobs SET status = 'cancelled'
+    WHERE lead_id = ? AND job_type = 'follow_up' AND status = 'pending'
+  `).run(lead.id);
+
+  // Build message history
+  const history = db.prepare(`
+    SELECT * FROM sms_messages WHERE lead_id = ? ORDER BY created_at ASC
+  `).all(lead.id);
+
+  const messages = history.map(m => ({
+    role: m.direction === 'outbound' ? 'assistant' : 'user',
+    content: m.body
+  }));
+  messages.push({ role: 'user', content });
+
+  const reply = await runSMSAgent(messages, lead);
+  if (!reply) return;
+
+  // Handle owner ping tag if present
+  if (typeof handleOwnerPingTag === 'function') {
+    await handleOwnerPingTag(reply, lead);
+  }
+
+  // Store inbound immediately
+  db.prepare(`INSERT INTO sms_messages (lead_id, direction, body) VALUES (?, ?, ?)`)
+    .run(lead.id, 'inbound', content);
+
+  // Typing delay
+  const typingDelay = Math.floor(Math.random() * 17000) + 8000;
+  console.log(`[Twilio] Replying to ${lead.lead_name} in ${Math.round(typingDelay/1000)}s`);
+
+  setTimeout(async () => {
+    // Outbound dedup
+    const recentReply = db.prepare(`
+      SELECT id FROM sms_messages
+      WHERE lead_id = ? AND direction = 'outbound'
+      AND created_at > datetime('now', '-30 seconds')
+      LIMIT 1
+    `).get(lead.id);
+
+    if (recentReply) {
+      console.log(`[Twilio] Already replied to ${lead.lead_name} in last 30s — skipping`);
+      return;
+    }
+
+    // Photos
+    const photoMatches = reply.match(/\[SEND_PHOTO: (\w+)\]/g) || [];
+    for (const match of photoMatches) {
+      const key = match.match(/\[SEND_PHOTO: (\w+)\]/)[1];
+      if (photoMap[key]) {
+        await sendSMSWithPhoto(from, '', photoMap[key]);
+      }
+    }
+
+    // Send clean reply
+    const cleanReply = reply
+      .replace(/\[SEND_PHOTO: \w+\]/g, '')
+      .replace(/\[TRIGGER_OWNER_PING\]/g, '')
+      .trim();
+
+    if (cleanReply) await sendSMS(from, cleanReply);
+
+    // Store with tags for dashboard
+    db.prepare(`INSERT INTO sms_messages (lead_id, direction, body) VALUES (?, ?, ?)`)
+      .run(lead.id, 'outbound', reply.trim());
+
+    // Cold nudge (skip if booked/confirmed)
+    if (lead.shop_id !== 'shopdesk-demo') {
+      const freshLead = db.prepare(`SELECT call_status FROM leads WHERE id = ?`).get(lead.id);
+      const skipStatuses = ['booked', 'confirmed', 'dead', 'opted_out', 'mia'];
+      if (!skipStatuses.includes(freshLead?.call_status)) {
+        scheduleColdNudgeJobs(lead.id, lead.shop_id);
+      }
+    }
+
+    console.log(`[Twilio] Replied to ${lead.lead_name}: "${cleanReply}"`);
+  }, typingDelay);
+});
 
 export default router;

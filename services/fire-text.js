@@ -45,7 +45,7 @@ export function detectInboundIntent(text) {
   const t = String(text ?? "").trim();
   if (/^\W*(stop|stopall|unsubscribe|cancel|end|quit|opt[\s-]?out)\W*$/i.test(t)) return "stop";
   if (/\b(stop (texting|messaging|contacting|calling|sending)|do not (text|contact|call)|don'?t (text|contact|call)|remove (me|my number)|take me off|leave me alone)\b/i.test(t)) return "stop";
-  if (/\bwrong (number|person)\b|\bhave the wrong\b/i.test(t)) return "wrong_number";
+  if (/\bwrong (number|person)\b|\bhave the wrong\b|\b(doesn'?t|does not|no longer|don'?t) live(s)? here\b|\bnot (his|her|their|the owner'?s?) (number|phone)\b|\bnever (heard of|owned)\b/i.test(t)) return "wrong_number";
   if (/\bnot interested\b|\bno,? thanks?\b|\bno thank you\b|\bnot (looking|needed)\b/i.test(t)) return "not_interested";
   return null;
 }
