@@ -36,7 +36,7 @@ export async function sendSMS(to, message) {
   }
 }
 
-async function sendSMSWithPhoto(to, text, mediaUrl) {
+export async function sendSMSWithPhoto(to, text, mediaUrl) {
   try {
     const accountSid = process.env.TWILIO_ACCOUNT_SID;
     const authToken = process.env.TWILIO_AUTH_TOKEN;

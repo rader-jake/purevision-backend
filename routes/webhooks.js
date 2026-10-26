@@ -597,9 +597,54 @@ function findLeadForInbound(from) {
 }
 
 // ─── INBOUND SMS WEBHOOK ──────────────────────────────────────────────────────
+// Twilio posts application/x-www-form-urlencoded (From, Body, ...) signed with X-Twilio-Signature.
+// The old Blooio JSON format is still accepted so nothing breaks mid-migration.
+
+/** True when X-Twilio-Signature matches HMAC-SHA1(authToken, url + sorted form params). */
+function isValidTwilioSignature(req) {
+  const token = process.env.TWILIO_AUTH_TOKEN;
+  const signature = req.headers['x-twilio-signature'];
+  if (!token || !signature) return false;
+
+  // Twilio signs the exact public URL it called. Behind Railway's proxy that's https + the public host;
+  // set TWILIO_WEBHOOK_BASE_URL (e.g. https://your-app.up.railway.app) if auto-detection ever disagrees.
+  const proto = String(req.headers['x-forwarded-proto'] || req.protocol).split(',')[0].trim();
+  const host = String(req.headers['x-forwarded-host'] || req.headers.host).split(',')[0].trim();
+  const base = (process.env.TWILIO_WEBHOOK_BASE_URL || `${proto}://${host}`).replace(/\/$/, '');
+  const url = base + req.originalUrl;
+
+  const params = req.body || {};
+  const data = url + Object.keys(params).sort().map(k => k + [].concat(params[k]).join('')).join('');
+  const expected = crypto.createHmac('sha1', token).update(data, 'utf8').digest('base64');
+
+  const a = Buffer.from(expected), b = Buffer.from(String(signature));
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+
+/** Verifies the Twilio signature, acknowledges with empty TwiML, then hands the text to the shared handler. */
+async function handleTwilioRequest(req, res) {
+  if (!isValidTwilioSignature(req)) {
+    console.error('[SMS Inbound] Rejected Twilio request — bad or missing signature');
+    return res.status(403).type('text/plain').send('Invalid signature');
+  }
+  // Empty TwiML: we reply later through the API, not in this response
+  res.status(200).type('text/xml').send('<?xml version="1.0" encoding="UTF-8"?><Response></Response>');
+
+  const from = req.body.From;
+  // A photo with no caption (e.g. fire damage) shouldn't be silently dropped
+  const content = (req.body.Body || '').trim() || (Number(req.body.NumMedia) > 0 ? '[Sent a photo or attachment]' : '');
+  if (!from || !content) return;
+  return handleInboundText({ from, content, contactName: null });
+}
+
 router.post('/webhook/sms/inbound',
   express.raw({ type: 'application/json' }),
+  express.urlencoded({ extended: false }),
   async (req, res) => {
+    // ── Twilio ──
+    if (req.is('application/x-www-form-urlencoded')) return handleTwilioRequest(req, res);
+
+    // ── Blooio (legacy) ──
     const rawBody = Buffer.isBuffer(req.body) ? req.body : Buffer.from(JSON.stringify(req.body));
     const signature = req.headers['x-blooio-signature'] ?? '';
     const payload_preview = JSON.parse(rawBody.toString('utf8'));
@@ -630,334 +675,195 @@ router.post('/webhook/sms/inbound',
 
     if (event !== 'message.received') return;
 
-    try {
-            const payload = JSON.parse(rawBody.toString('utf8'));
-      // Support both legacy and v4 Blooio payload formats
-      const from = payload.from_number || payload.data?.sender || payload.data?.contact?.identifier || payload.data?.from || payload.external_id;
-      const content = payload.content || payload.data?.text || payload.text;
+    const payload = JSON.parse(rawBody.toString('utf8'));
+    // Support both legacy and v4 Blooio payload formats
+    const from = payload.from_number || payload.data?.sender || payload.data?.contact?.identifier || payload.data?.from || payload.external_id;
+    const content = payload.content || payload.data?.text || payload.text;
+    if (!from || !content) return;
 
-      if (!from || !content) return;
-
-      console.log(`[SMS Inbound] From: ${from} — "${content}"`);
-
-      let lead = findLeadForInbound(from);
-
-      if (!lead) {
-        console.log('[SMS] New inbound from unknown number:', from);
-
-        // Auto-create a lead from the inbound text
-        const contactName = payload.data?.contact?.name || 'there';
-        const result = db.prepare(`
-          INSERT INTO leads (shop_id, lead_name, lead_phone, lead_vehicle, lead_special, call_status)
-          VALUES (?, ?, ?, ?, ?, ?)
-        `).run('pure-vision-tints', contactName, from, 'your vehicle', 'Ceramic Special', 'pending');
-
-        lead = db.prepare(`SELECT * FROM leads WHERE id = ?`).get(result.lastInsertRowid);
-        console.log(`[SMS] Auto-created lead ${lead.id} for ${contactName} (${from})`);
-      }
-      // Dedup check — skip if we already processed this exact message recently
-      const recentDupe = db.prepare(`
-        SELECT id FROM sms_messages
-        WHERE lead_id = ? AND direction = 'inbound' AND body = ?
-        AND created_at > datetime('now', '-2 minutes')
-        LIMIT 1
-      `).get(lead.id, content);
-
-      if (recentDupe) {
-        console.log(`[SMS] Duplicate inbound from ${lead.lead_name} — skipping`);
-        return;
-      }
-
-      const matchedPhone = db.prepare(`
-        SELECT * FROM lead_phones
-        WHERE lead_id = ? AND phone LIKE '%' || ? || '%'
-        LIMIT 1
-      `).get(lead.id, last10(from));
-      const intent = lead.shop_id === INTEGRITY_SHOP ? detectInboundIntent(content) : null;
-
-      // ── "Wrong number": that number is NOT the homeowner — it didn't "reply", try another ──
-      if (intent === 'wrong_number') {
-        db.prepare(`INSERT INTO sms_messages (lead_id, direction, body) VALUES (?, ?, ?)`)
-          .run(lead.id, 'inbound', content);
-        if (matchedPhone) db.prepare('UPDATE lead_phones SET status = ? WHERE id = ?').run('wrong_number', matchedPhone.id);
-        repointLeadPhone(lead.id);
-        markDeadIfExhausted(lead.id);
-        console.log(`[SMS] ${lead.lead_name} — wrong number (${from}), no reply sent`);
-        return;
-      }
-
-      // ── Multi-number leads: this number works, so stop trying the others ──
-      if (matchedPhone) {
-        if (matchedPhone.status !== 'replied') {
-          db.prepare('UPDATE lead_phones SET status = ? WHERE id = ?').run('replied', matchedPhone.id);
-        }
-        // Keep the conversation (and any follow-ups) on the number that answered
-        db.prepare('UPDATE leads SET lead_phone = ? WHERE id = ?').run(matchedPhone.phone, lead.id);
-        cancelAllJobsForLead(lead.id);
-      }
-
-      // ── Fire-damage homeowners: honor opt-outs immediately; "not interested" gets one kind reply ──
-      if (intent === 'stop') {
-        db.prepare(`INSERT INTO sms_messages (lead_id, direction, body) VALUES (?, ?, ?)`)
-          .run(lead.id, 'inbound', content);
-        db.prepare(`UPDATE leads SET call_status = 'opted_out' WHERE id = ?`).run(lead.id);
-        cancelAllJobsForLead(lead.id);
-        console.log(`[SMS] ${lead.lead_name} opted out — no reply sent, lead closed`);
-        return;
-      }
-      if (intent === 'not_interested') {
-        // The AI answers kindly once below; marking the lead dead stops every follow-up
-        db.prepare(`UPDATE leads SET call_status = 'dead' WHERE id = ?`).run(lead.id);
-        cancelAllJobsForLead(lead.id);
-        lead = { ...lead, call_status: 'dead' };
-      }
-
-      // If manual mode is on, just store the inbound message — don't AI respond
-      if (lead.manual_mode === 1) {
-        console.log(`[SMS] Manual mode active for ${lead.lead_name} — storing inbound, skipping AI`);
-        db.prepare(`INSERT INTO sms_messages (lead_id, direction, body) VALUES (?, ?, ?)`)
-          .run(lead.id, 'inbound', content);
-        return;
-      }
-
-      // Cancel non-responsive follow-ups since they replied
-      db.prepare(`
-        UPDATE scheduled_jobs SET status = 'cancelled'
-        WHERE lead_id = ? AND job_type = 'follow_up' AND status = 'pending'
-      `).run(lead.id);
-
-      // Baseline for the outbound dedup below: the newest outbound message that
-      // already exists. Anything with a higher id was sent while this message was
-      // being handled (a duplicate webhook's reply, or a manual text).
-      const lastOutboundId = db.prepare(`
-        SELECT COALESCE(MAX(id), 0) AS id FROM sms_messages
-        WHERE lead_id = ? AND direction = 'outbound'
-      `).get(lead.id).id;
-
-      const history = db.prepare(`
-        SELECT * FROM sms_messages
-        WHERE lead_id = ? ORDER BY created_at ASC
-      `).all(lead.id);
-
-      const messages = history.map(m => ({
-        role: m.direction === 'outbound' ? 'assistant' : 'user',
-        content: m.body
-      }));
-      messages.push({ role: 'user', content });
-
-      const reply = await runSMSAgent(messages, lead);
-      if (!reply) return;
-
-      await handleOwnerPingTag(reply, lead);
-
-      // Store inbound message immediately
-      db.prepare(`INSERT INTO sms_messages (lead_id, direction, body) VALUES (?, ?, ?)`)
-        .run(lead.id, 'inbound', content);
-
-      // Random typing delay 8-25 seconds
-      const typingDelay = Math.floor(Math.random() * 17000) + 8000;
-      console.log(`[SMS] Replying to ${lead.lead_name} in ${Math.round(typingDelay/1000)}s`);
-
-      setTimeout(async () => {
-        // Outbound dedup — skip only if something else was sent to this lead AFTER
-        // this message arrived. (A time window like "last 30s" wrongly counts the
-        // opener when the lead replies right away, silently dropping the AI's reply.)
-        const alreadyReplied = db.prepare(`
-          SELECT id FROM sms_messages
-          WHERE lead_id = ? AND direction = 'outbound' AND id > ?
-          LIMIT 1
-        `).get(lead.id, lastOutboundId);
-
-        if (alreadyReplied) {
-          console.log(`[SMS] Already replied to ${lead.lead_name} since this message arrived — skipping duplicate`);
-          return;
-        }
-        // Extract and send photos first
-        const photoMatches = reply.match(/\[SEND_PHOTO: (\w+)\]/g) || [];
-        for (const match of photoMatches) {
-          const key = match.match(/\[SEND_PHOTO: (\w+)\]/)[1];
-          if (photoMap[key]) {
-            await sendSMSWithPhoto(from, '', photoMap[key]);
-          }
-        }
-
-        // Send clean text reply (strip photo tags for SMS)
-        const cleanReply = reply
-        .replace(/\[SEND_PHOTO: \w+\]/g, '')
-        .replace(/\[TRIGGER_OWNER_PING\]/g, '')
-        .trim();
-
-        if (cleanReply) await sendSMS(from, cleanReply);
-
-        // Store original reply WITH photo tags so dashboard can render them
-        db.prepare(`INSERT INTO sms_messages (lead_id, direction, body) VALUES (?, ?, ?)`)
-          .run(lead.id, 'outbound', reply.trim());
-
-        // Schedule cold nudge — but only if lead isn't already booked/confirmed
-        if (lead.shop_id !== 'shopdesk-demo') {
-          const freshLead = db.prepare(`SELECT call_status FROM leads WHERE id = ?`).get(lead.id);
-          const skipStatuses = ['booked', 'confirmed', 'dead', 'opted_out', 'mia', 'claimed'];
-          if (!skipStatuses.includes(freshLead?.call_status)) {
-            scheduleColdNudgeJobs(lead.id, lead.shop_id);
-          } else {
-            console.log(`[SMS] Skipping cold nudge for ${lead.lead_name} — status is ${freshLead.call_status}`);
-          }
-        }
-
-        console.log(`[SMS] Replied to ${lead.lead_name}: "${cleanReply}"`);
-      }, typingDelay);
-
-    } catch(e) {
-      console.error('[SMS Inbound] Error:', e.message);
-    }
+    return handleInboundText({ from, content, contactName: payload.data?.contact?.name });
   }
 );
 
-// ─── ROUTE: TWILIO INBOUND SMS ───────────────────────────────────────────────
-router.post('/webhook/twilio/inbound', express.urlencoded({ extended: false }), async (req, res) => {
-  // Twilio sends form-encoded: From, To, Body, MessageSid
-  const from = req.body.From;
-  const content = req.body.Body;
-
-  // Respond immediately with empty TwiML so Twilio doesn't retry
-  res.type('text/xml').send('<?xml version="1.0" encoding="UTF-8"?><Response></Response>');
-
-  if (!from || !content) return;
-
-  console.log(`[Twilio Inbound] From: ${from} — "${content}"`);
-
-  // Find the lead
-  let lead = db.prepare(`
-    SELECT * FROM leads
-    WHERE replace(replace(replace(lead_phone, '+', ''), '-', ''), ' ', '')
-      LIKE '%' || replace(replace(replace(?, '+', ''), '-', ''), ' ', '') || '%'
-    ORDER BY created_at DESC LIMIT 1
-  `).get(from);
-
-  if (!lead) {
-    console.log('[Twilio] New inbound from unknown number:', from);
-    const result = db.prepare(`
-      INSERT INTO leads (shop_id, lead_name, lead_phone, lead_vehicle, lead_special, call_status)
-      VALUES (?, ?, ?, ?, ?, ?)
-    `).run('pure-vision-tints', 'Caller', from, 'your vehicle', 'Inquiry', 'pending');
-    lead = db.prepare(`SELECT * FROM leads WHERE id = ?`).get(result.lastInsertRowid);
-    console.log(`[Twilio] Auto-created lead ${lead.id} for ${from}`);
-  }
-
-  // Dedup check
-  const recentDupe = db.prepare(`
-    SELECT id FROM sms_messages
-    WHERE lead_id = ? AND direction = 'inbound' AND body = ?
-    AND created_at > datetime('now', '-2 minutes')
-    LIMIT 1
-  `).get(lead.id, content);
-
-  if (recentDupe) {
-    console.log(`[Twilio] Duplicate inbound from ${lead.lead_name} — skipping`);
-    return;
-  }
-
-  // Check for lead_phones table (for insurance adjuster leads)
+// Everything that happens once we know who texted and what they said (provider-agnostic).
+async function handleInboundText({ from, content, contactName: providedName }) {
   try {
+    console.log(`[SMS Inbound] From: ${from} — "${content}"`);
+
+    let lead = findLeadForInbound(from);
+
+    if (!lead) {
+      console.log('[SMS] New inbound from unknown number:', from);
+
+      // Auto-create a lead from the inbound text
+      const contactName = providedName || 'there';
+      const result = db.prepare(`
+        INSERT INTO leads (shop_id, lead_name, lead_phone, lead_vehicle, lead_special, call_status)
+        VALUES (?, ?, ?, ?, ?, ?)
+      `).run('pure-vision-tints', contactName, from, 'your vehicle', 'Ceramic Special', 'pending');
+
+      lead = db.prepare(`SELECT * FROM leads WHERE id = ?`).get(result.lastInsertRowid);
+      console.log(`[SMS] Auto-created lead ${lead.id} for ${contactName} (${from})`);
+    }
+    // Dedup check — skip if we already processed this exact message recently
+    const recentDupe = db.prepare(`
+      SELECT id FROM sms_messages
+      WHERE lead_id = ? AND direction = 'inbound' AND body = ?
+      AND created_at > datetime('now', '-2 minutes')
+      LIMIT 1
+    `).get(lead.id, content);
+
+    if (recentDupe) {
+      console.log(`[SMS] Duplicate inbound from ${lead.lead_name} — skipping`);
+      return;
+    }
+
     const matchedPhone = db.prepare(`
       SELECT * FROM lead_phones
       WHERE lead_id = ? AND phone LIKE '%' || ? || '%'
       LIMIT 1
-    `).get(lead.id, from.slice(-10));
+    `).get(lead.id, last10(from));
+    const intent = lead.shop_id === INTEGRITY_SHOP ? detectInboundIntent(content) : null;
 
-    if (matchedPhone && matchedPhone.status !== 'replied') {
-      db.prepare('UPDATE lead_phones SET status = ? WHERE id = ?')
-        .run('replied', matchedPhone.id);
-    }
-  } catch(e) { /* lead_phones table may not exist yet */ }
-
-  // Manual mode check
-  if (lead.manual_mode === 1) {
-    console.log(`[Twilio] Manual mode active for ${lead.lead_name} — storing only`);
-    db.prepare(`INSERT INTO sms_messages (lead_id, direction, body) VALUES (?, ?, ?)`)
-      .run(lead.id, 'inbound', content);
-    return;
-  }
-
-  // Cancel non-responsive follow-ups
-  db.prepare(`
-    UPDATE scheduled_jobs SET status = 'cancelled'
-    WHERE lead_id = ? AND job_type = 'follow_up' AND status = 'pending'
-  `).run(lead.id);
-
-  // Build message history
-  const history = db.prepare(`
-    SELECT * FROM sms_messages WHERE lead_id = ? ORDER BY created_at ASC
-  `).all(lead.id);
-
-  const messages = history.map(m => ({
-    role: m.direction === 'outbound' ? 'assistant' : 'user',
-    content: m.body
-  }));
-  messages.push({ role: 'user', content });
-
-  const reply = await runSMSAgent(messages, lead);
-  if (!reply) return;
-
-  // Handle owner ping tag if present
-  if (typeof handleOwnerPingTag === 'function') {
-    await handleOwnerPingTag(reply, lead);
-  }
-
-  // Store inbound immediately
-  db.prepare(`INSERT INTO sms_messages (lead_id, direction, body) VALUES (?, ?, ?)`)
-    .run(lead.id, 'inbound', content);
-
-  // Typing delay
-  const typingDelay = Math.floor(Math.random() * 17000) + 8000;
-  console.log(`[Twilio] Replying to ${lead.lead_name} in ${Math.round(typingDelay/1000)}s`);
-
-  setTimeout(async () => {
-    // Outbound dedup
-    const recentReply = db.prepare(`
-      SELECT id FROM sms_messages
-      WHERE lead_id = ? AND direction = 'outbound'
-      AND created_at > datetime('now', '-30 seconds')
-      LIMIT 1
-    `).get(lead.id);
-
-    if (recentReply) {
-      console.log(`[Twilio] Already replied to ${lead.lead_name} in last 30s — skipping`);
+    // ── "Wrong number": that number is NOT the homeowner — it didn't "reply", try another ──
+    if (intent === 'wrong_number') {
+      db.prepare(`INSERT INTO sms_messages (lead_id, direction, body) VALUES (?, ?, ?)`)
+        .run(lead.id, 'inbound', content);
+      if (matchedPhone) db.prepare('UPDATE lead_phones SET status = ? WHERE id = ?').run('wrong_number', matchedPhone.id);
+      repointLeadPhone(lead.id);
+      markDeadIfExhausted(lead.id);
+      console.log(`[SMS] ${lead.lead_name} — wrong number (${from}), no reply sent`);
       return;
     }
 
-    // Photos
-    const photoMatches = reply.match(/\[SEND_PHOTO: (\w+)\]/g) || [];
-    for (const match of photoMatches) {
-      const key = match.match(/\[SEND_PHOTO: (\w+)\]/)[1];
-      if (photoMap[key]) {
-        await sendSMSWithPhoto(from, '', photoMap[key]);
+    // ── Multi-number leads: this number works, so stop trying the others ──
+    if (matchedPhone) {
+      if (matchedPhone.status !== 'replied') {
+        db.prepare('UPDATE lead_phones SET status = ? WHERE id = ?').run('replied', matchedPhone.id);
       }
+      // Keep the conversation (and any follow-ups) on the number that answered
+      db.prepare('UPDATE leads SET lead_phone = ? WHERE id = ?').run(matchedPhone.phone, lead.id);
+      cancelAllJobsForLead(lead.id);
     }
 
-    // Send clean reply
-    const cleanReply = reply
+    // ── Fire-damage homeowners: honor opt-outs immediately; "not interested" gets one kind reply ──
+    if (intent === 'stop') {
+      db.prepare(`INSERT INTO sms_messages (lead_id, direction, body) VALUES (?, ?, ?)`)
+        .run(lead.id, 'inbound', content);
+      db.prepare(`UPDATE leads SET call_status = 'opted_out' WHERE id = ?`).run(lead.id);
+      cancelAllJobsForLead(lead.id);
+      console.log(`[SMS] ${lead.lead_name} opted out — no reply sent, lead closed`);
+      return;
+    }
+    if (intent === 'not_interested') {
+      // The AI answers kindly once below; marking the lead dead stops every follow-up
+      db.prepare(`UPDATE leads SET call_status = 'dead' WHERE id = ?`).run(lead.id);
+      cancelAllJobsForLead(lead.id);
+      lead = { ...lead, call_status: 'dead' };
+    }
+
+    // If manual mode is on, just store the inbound message — don't AI respond
+    if (lead.manual_mode === 1) {
+      console.log(`[SMS] Manual mode active for ${lead.lead_name} — storing inbound, skipping AI`);
+      db.prepare(`INSERT INTO sms_messages (lead_id, direction, body) VALUES (?, ?, ?)`)
+        .run(lead.id, 'inbound', content);
+      return;
+    }
+
+    // Cancel non-responsive follow-ups since they replied
+    db.prepare(`
+      UPDATE scheduled_jobs SET status = 'cancelled'
+      WHERE lead_id = ? AND job_type = 'follow_up' AND status = 'pending'
+    `).run(lead.id);
+
+    // Baseline for the outbound dedup below: the newest outbound message that
+    // already exists. Anything with a higher id was sent while this message was
+    // being handled (a duplicate webhook's reply, or a manual text).
+    const lastOutboundId = db.prepare(`
+      SELECT COALESCE(MAX(id), 0) AS id FROM sms_messages
+      WHERE lead_id = ? AND direction = 'outbound'
+    `).get(lead.id).id;
+
+    const history = db.prepare(`
+      SELECT * FROM sms_messages
+      WHERE lead_id = ? ORDER BY created_at ASC
+    `).all(lead.id);
+
+    const messages = history.map(m => ({
+      role: m.direction === 'outbound' ? 'assistant' : 'user',
+      content: m.body
+    }));
+    messages.push({ role: 'user', content });
+
+    const reply = await runSMSAgent(messages, lead);
+    if (!reply) return;
+
+    await handleOwnerPingTag(reply, lead);
+
+    // Store inbound message immediately
+    db.prepare(`INSERT INTO sms_messages (lead_id, direction, body) VALUES (?, ?, ?)`)
+      .run(lead.id, 'inbound', content);
+
+    // Random typing delay 8-25 seconds
+    const typingDelay = Math.floor(Math.random() * 17000) + 8000;
+    console.log(`[SMS] Replying to ${lead.lead_name} in ${Math.round(typingDelay/1000)}s`);
+
+    setTimeout(async () => {
+      // Outbound dedup — skip only if something else was sent to this lead AFTER
+      // this message arrived. (A time window like "last 30s" wrongly counts the
+      // opener when the lead replies right away, silently dropping the AI's reply.)
+      const alreadyReplied = db.prepare(`
+        SELECT id FROM sms_messages
+        WHERE lead_id = ? AND direction = 'outbound' AND id > ?
+        LIMIT 1
+      `).get(lead.id, lastOutboundId);
+
+      if (alreadyReplied) {
+        console.log(`[SMS] Already replied to ${lead.lead_name} since this message arrived — skipping duplicate`);
+        return;
+      }
+      // Extract and send photos first
+      const photoMatches = reply.match(/\[SEND_PHOTO: (\w+)\]/g) || [];
+      for (const match of photoMatches) {
+        const key = match.match(/\[SEND_PHOTO: (\w+)\]/)[1];
+        if (photoMap[key]) {
+          await sendSMSWithPhoto(from, '', photoMap[key]);
+        }
+      }
+
+      // Send clean text reply (strip photo tags for SMS)
+      const cleanReply = reply
       .replace(/\[SEND_PHOTO: \w+\]/g, '')
       .replace(/\[TRIGGER_OWNER_PING\]/g, '')
       .trim();
 
-    if (cleanReply) await sendSMS(from, cleanReply);
+      if (cleanReply) await sendSMS(from, cleanReply);
 
-    // Store with tags for dashboard
-    db.prepare(`INSERT INTO sms_messages (lead_id, direction, body) VALUES (?, ?, ?)`)
-      .run(lead.id, 'outbound', reply.trim());
+      // Store original reply WITH photo tags so dashboard can render them
+      db.prepare(`INSERT INTO sms_messages (lead_id, direction, body) VALUES (?, ?, ?)`)
+        .run(lead.id, 'outbound', reply.trim());
 
-    // Cold nudge (skip if booked/confirmed)
-    if (lead.shop_id !== 'shopdesk-demo') {
-      const freshLead = db.prepare(`SELECT call_status FROM leads WHERE id = ?`).get(lead.id);
-      const skipStatuses = ['booked', 'confirmed', 'dead', 'opted_out', 'mia'];
-      if (!skipStatuses.includes(freshLead?.call_status)) {
-        scheduleColdNudgeJobs(lead.id, lead.shop_id);
+      // Schedule cold nudge — but only if lead isn't already booked/confirmed
+      if (lead.shop_id !== 'shopdesk-demo') {
+        const freshLead = db.prepare(`SELECT call_status FROM leads WHERE id = ?`).get(lead.id);
+        const skipStatuses = ['booked', 'confirmed', 'dead', 'opted_out', 'mia', 'claimed'];
+        if (!skipStatuses.includes(freshLead?.call_status)) {
+          scheduleColdNudgeJobs(lead.id, lead.shop_id);
+        } else {
+          console.log(`[SMS] Skipping cold nudge for ${lead.lead_name} — status is ${freshLead.call_status}`);
+        }
       }
-    }
 
-    console.log(`[Twilio] Replied to ${lead.lead_name}: "${cleanReply}"`);
-  }, typingDelay);
-});
+      console.log(`[SMS] Replied to ${lead.lead_name}: "${cleanReply}"`);
+    }, typingDelay);
+
+  } catch(e) {
+    console.error('[SMS Inbound] Error:', e.message);
+  }
+}
+
+// ─── ROUTE: TWILIO INBOUND SMS ───────────────────────────────────────────────
+// Same handler as /webhook/sms/inbound — point Twilio's "A message comes in" webhook at either URL.
+router.post('/webhook/twilio/inbound', express.urlencoded({ extended: false }), handleTwilioRequest);
 
 export default router;
