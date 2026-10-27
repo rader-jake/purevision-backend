@@ -150,7 +150,8 @@ export async function runSMSAgent(messages, lead) {
   while (true) {
     const requestBody = {
       model: 'claude-sonnet-4-5',
-      max_tokens: 500,
+      max_tokens: 300,
+      temperature: 0.8,
       system: buildSMSSystemPrompt(lead),
       messages: currentMessages
     };
