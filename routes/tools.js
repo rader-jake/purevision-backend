@@ -299,8 +299,7 @@ router.post("/tools/send-deposit", async (req, res) => {
 // Used by the booking page instead of /tools/book-appointment + /tools/send-deposit.
 // The appointment is NOT booked on the calendar here — it's stored as "pending"
 // on the lead and only booked by the Square webhook once payment actually completes.
-// No SMS is sent from this route: Blooio blocks links/attachments to contacts
-// who haven't replied yet, so the booking page shows the deposit_url as a button instead.
+// No SMS is sent from this route: the booking page shows the deposit_url as a button instead.
 router.post("/tools/create-deposit-link", async (req, res) => {
   console.log("\n[Create Deposit Link Tool] Called with:", JSON.stringify(req.body, null, 2));
 

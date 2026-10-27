@@ -598,36 +598,18 @@ router.post('/admin/send-message-with-link', async (req, res) => {
   if (!lead) return res.status(404).json({ error: 'Lead not found' });
 
   try {
-    const encodedTo = encodeURIComponent(lead.lead_phone);
-    const body = {
-      text: message,
-      fromNumber: process.env.BLOOIO_NUMBER,
-    };
+    // Phones make a plain URL in the body tappable, so no attachment is needed
+    const fullMessage = attachment_url ? `${message}\n${attachment_url}` : message;
+    const result = await sendSMS(lead.lead_phone, fullMessage);
+    console.log('[SMS Link] Sent:', result?.success !== false ? 'ok' : result.error);
 
-    // Use Blooio's attachment feature to make the URL clickable
-    if (attachment_url) {
-      body.attachments = [attachment_url];
-    }
-
-    const resp = await fetch(`https://backend.blooio.com/v2/api/chats/${encodedTo}/messages`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${process.env.BLOOIO_API_KEY}`
-      },
-      body: JSON.stringify(body)
-    });
-
-    const data = await resp.json();
-    console.log('[SMS Link] Sent:', JSON.stringify(data));
-
-    if (!data.error) {
+    if (result?.success !== false) {
       db.prepare(`INSERT INTO sms_messages (lead_id, direction, body) VALUES (?, ?, ?)`)
-        .run(lead_id, 'outbound', `${message}\n${attachment_url}`);
+        .run(lead_id, 'outbound', fullMessage);
       return res.json({ success: true });
     }
 
-    res.status(500).json({ error: data.error });
+    res.status(500).json({ error: result.error || 'SMS send failed' });
   } catch(e) {
     console.error('[SMS Link] Failed:', e.message);
     res.status(500).json({ error: e.message });

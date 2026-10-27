@@ -110,8 +110,7 @@ router.post("/webhooks/square", async (req, res) => {
     db.prepare(`UPDATE leads SET deposit_paid = 1, call_status = 'confirmed' WHERE id = ?`)
       .run(lead.id);
 
-    // Send confirmation via SMS — plain text, no links/attachments (Blooio blocks
-    // those for contacts who haven't replied yet)
+    // Send confirmation via SMS — plain text, no links/attachments
     let confirmMsg;
     if (lead.booked_at && !calendarFailed) {
       const date = new Date(lead.booked_at.replace(" ", "T") + ":00-05:00");
@@ -598,7 +597,6 @@ function findLeadForInbound(from) {
 
 // ─── INBOUND SMS WEBHOOK ──────────────────────────────────────────────────────
 // Twilio posts application/x-www-form-urlencoded (From, Body, ...) signed with X-Twilio-Signature.
-// The old Blooio JSON format is still accepted so nothing breaks mid-migration.
 
 /** True when X-Twilio-Signature matches HMAC-SHA1(authToken, url + sorted form params). */
 function isValidTwilioSignature(req) {
@@ -637,53 +635,7 @@ async function handleTwilioRequest(req, res) {
   return handleInboundText({ from, content, contactName: null });
 }
 
-router.post('/webhook/sms/inbound',
-  express.raw({ type: 'application/json' }),
-  express.urlencoded({ extended: false }),
-  async (req, res) => {
-    // ── Twilio ──
-    if (req.is('application/x-www-form-urlencoded')) return handleTwilioRequest(req, res);
-
-    // ── Blooio (legacy) ──
-    const rawBody = Buffer.isBuffer(req.body) ? req.body : Buffer.from(JSON.stringify(req.body));
-    const signature = req.headers['x-blooio-signature'] ?? '';
-    const payload_preview = JSON.parse(rawBody.toString('utf8'));
-    const event = req.headers['x-blooio-event'] || payload_preview.type || payload_preview.event || '';
-
-    if (signature) {
-      try {
-        const parts = {};
-        signature.split(',').forEach(part => {
-          const [key, value] = part.split('=');
-          parts[key] = value;
-        });
-        const timestamp = parts['t'];
-        const v1 = parts['v1'];
-        if (!timestamp || !v1) return res.sendStatus(401);
-        const signedPayload = `${timestamp}.${rawBody.toString('utf8')}`;
-        const expected = crypto
-          .createHmac('sha256', process.env.BLOOIO_SECRET)
-          .update(signedPayload)
-          .digest('hex');
-        if (expected !== v1) return res.sendStatus(401);
-      } catch(e) {
-        return res.sendStatus(401);
-      }
-    }
-
-    res.sendStatus(200);
-
-    if (event !== 'message.received') return;
-
-    const payload = JSON.parse(rawBody.toString('utf8'));
-    // Support both legacy and v4 Blooio payload formats
-    const from = payload.from_number || payload.data?.sender || payload.data?.contact?.identifier || payload.data?.from || payload.external_id;
-    const content = payload.content || payload.data?.text || payload.text;
-    if (!from || !content) return;
-
-    return handleInboundText({ from, content, contactName: payload.data?.contact?.name });
-  }
-);
+router.post('/webhook/sms/inbound', express.urlencoded({ extended: false }), handleTwilioRequest);
 
 // Everything that happens once we know who texted and what they said (provider-agnostic).
 async function handleInboundText({ from, content, contactName: providedName }) {
