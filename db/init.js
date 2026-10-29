@@ -140,3 +140,6 @@ for (const col of ["meta_fbp", "meta_fbc", "meta_user_agent", "meta_ip", "meta_s
     db.exec(`ALTER TABLE leads ADD COLUMN ${col} TEXT`);
   } catch(e) { /* already exists */ }
 }
+try {
+  db.exec(`ALTER TABLE leads ADD COLUMN quote_total INTEGER`);
+} catch(e) { /* already exists */ }
