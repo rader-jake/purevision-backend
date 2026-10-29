@@ -187,9 +187,9 @@ router.post("/webhook/ghl/:shopId", async (req, res) => {
   res.status(200).json({ received: true, leadId });
 
   if (shop.smsOnly) {
-    // Random human-like delay 30-90 seconds
-    const delay = 3000;
-    console.log(`[${shopId}] Sending first SMS to ${lead.leadName} in 3s`);
+    // First text goes out immediately — speed to lead
+    const delay = 0;
+    console.log(`[${shopId}] Sending first SMS to ${lead.leadName} now`);
 
     setTimeout(async () => {
             const openers = [
@@ -269,7 +269,7 @@ router.post("/webhook/meta", async (req, res) => {
         if (leadData.phone) {
           const shop = SHOP_CONFIGS["pure-vision-tints"];
           if (shop.smsOnly) {
-            const delay = Math.floor(Math.random() * 60000) + 30000;
+            const delay = 0;
             setTimeout(async () => {
               const msg = `Hey ${leadData.name}! This is Jake with Pure Vision Tints. You reached out about tinting your ${leadData.vehicle || 'vehicle'} — were you still interested in getting that done?`;
               const smsResult = await sendSMS(leadData.phone, msg);
@@ -375,8 +375,8 @@ router.post("/webhook/shopdesk-meta", async (req, res) => {
         console.log(`[ShopDesk Meta] Lead stored — DB id: ${leadId}, name: ${shopdeskLeadData.name}`);
 
         if (shopdeskLeadData.phone) {
-          const delay = Math.floor(Math.random() * 60000) + 30000;
-          console.log(`[ShopDesk Meta] Sending first SMS to ${shopdeskLeadData.name} in ${Math.round(delay / 1000)}s`);
+          const delay = 0;
+          console.log(`[ShopDesk Meta] Sending first SMS to ${shopdeskLeadData.name} now`);
 
           setTimeout(async () => {
             const msg = buildShopdeskOpenerMessage(shopdeskLeadData);
@@ -512,9 +512,9 @@ router.post("/webhook/sms-only/:shopId", async (req, res) => {
     return;
   }
 
-  // Random human-like delay 30-90 seconds
-  const delay = Math.floor(Math.random() * 60000) + 30000;
-  console.log(`[${shopId}] Sending first SMS to ${lead.leadName} in ${Math.round(delay/1000)}s`);
+  // First text goes out immediately — speed to lead
+  const delay = 0;
+  console.log(`[${shopId}] Sending first SMS to ${lead.leadName} now`);
 
   setTimeout(async () => {
     let msg;
