@@ -1,10 +1,10 @@
-import { buildSMSSystemPrompt } from "./prompts/index.js";
+import { buildSMSSystemPrompt, SPLIT_TAG } from "./prompts/index.js";
 
 // ─── SMS TOOLS ────────────────────────────────────────────────────────────────
 const smsTools = [
   {
     name: "get_availability",
-    description: "Check available appointment slots for a given date",
+    description: "Check available appointment slots for a given date. Only use this after the customer has said they want to schedule or has named a day or timeframe. Never use it to open the scheduling conversation or to suggest a time they haven't asked about.",
     input_schema: {
       type: "object",
       properties: {
@@ -146,6 +146,9 @@ function sanitizeMessages(messages) {
 export async function runSMSAgent(messages, lead) {
   let currentMessages = sanitizeMessages([...messages]);
   const tools = getSMSTools(lead);
+  // Text Claude writes alongside a tool call ("No problem — the deposit locks the price…") is
+  // part of the answer, so keep it and send it ahead of the final text as its own text message.
+  const leadInText = [];
 
   while (true) {
     const requestBody = {
@@ -188,6 +191,10 @@ export async function runSMSAgent(messages, lead) {
         'schedule_followup':      'schedule-followup',
       };
 
+      for (const block of content) {
+        if (block.type === 'text' && block.text.trim()) leadInText.push(block.text.trim());
+      }
+
       // Handle ALL tool_use blocks in this response (Claude can return multiple)
       const toolUses = content.filter(b => b.type === 'tool_use');
       const toolResults = [];
@@ -229,6 +236,7 @@ export async function runSMSAgent(messages, lead) {
     }
 
     const textBlock = content.find(b => b.type === 'text');
-    return textBlock?.text || null;
+    const parts = [...leadInText, textBlock?.text?.trim()].filter(Boolean);
+    return parts.length ? parts.join(`\n${SPLIT_TAG}\n`) : null;
   }
 }

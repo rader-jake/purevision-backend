@@ -8,6 +8,7 @@ import { scheduleFollowUpJobs, scheduleColdNudgeJobs, cancelAllJobsForLead } fro
 import { bookGoogleCalendarEvent } from "../services/calendar.js";
 import { sendMetaDepositPurchase } from "../services/meta.js";
 import { runSMSAgent } from "../agents/sms-agent.js";
+import { SPLIT_TAG } from "../agents/prompts/index.js";
 import { triggerRetellCall } from "./retell.js";
 import { INTEGRITY_SHOP, buildOpener, detectInboundIntent, last10, normalizePhone } from "../services/fire-text.js";
 import { markDeadIfExhausted, repointLeadPhone } from "../services/fire-leads.js";
@@ -619,6 +620,25 @@ function isValidTwilioSignature(req) {
   return a.length === b.length && crypto.timingSafeEqual(a, b);
 }
 
+const seenMessageSids = new Set();
+
+// Latest inbound text per lead. Each new text supersedes the reply still waiting to go out for the
+// previous one, so the customer gets one answer that has seen everything they said.
+const pendingReplies = new Map(); // leadId -> { gen, timer }
+
+// People text in bursts ("lifetime warranty?" … "also where are you located?"). Wait this long after the
+// latest text before spending an AI call, so one reply covers the whole burst. Each new text restarts it.
+const REPLY_SETTLE_MS = Number(process.env.REPLY_SETTLE_MS) || 6000;
+const MAX_TEXTS_PER_REPLY = 3;
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
+/** The AI separates texts with [SPLIT]; returns the individual texts (at most MAX_TEXTS_PER_REPLY). */
+function splitReply(reply) {
+  const parts = reply.split(SPLIT_TAG).map(p => p.trim()).filter(p => p.replace(/\[TRIGGER_OWNER_PING\]/g, '').trim());
+  if (parts.length <= MAX_TEXTS_PER_REPLY) return parts;
+  return [...parts.slice(0, MAX_TEXTS_PER_REPLY - 1), parts.slice(MAX_TEXTS_PER_REPLY - 1).join('\n\n')];
+}
+
 /** Verifies the Twilio signature, acknowledges with empty TwiML, then hands the text to the shared handler. */
 async function handleTwilioRequest(req, res) {
   if (!isValidTwilioSignature(req)) {
@@ -627,6 +647,17 @@ async function handleTwilioRequest(req, res) {
   }
   // Empty TwiML: we reply later through the API, not in this response
   res.status(200).type('text/xml').send('<?xml version="1.0" encoding="UTF-8"?><Response></Response>');
+
+  // Twilio retries a webhook it thinks failed; the same MessageSid must never be handled twice
+  const sid = req.body.MessageSid;
+  if (sid) {
+    if (seenMessageSids.has(sid)) {
+      console.log(`[SMS Inbound] Duplicate delivery of ${sid} — ignoring`);
+      return;
+    }
+    seenMessageSids.add(sid);
+    if (seenMessageSids.size > 500) seenMessageSids.delete(seenMessageSids.values().next().value);
+  }
 
   const from = req.body.From;
   // A photo with no caption (e.g. fire damage) shouldn't be silently dropped
@@ -728,42 +759,72 @@ async function handleInboundText({ from, content, contactName: providedName }) {
       WHERE lead_id = ? AND job_type = 'follow_up' AND status = 'pending'
     `).run(lead.id);
 
-    // Baseline for the outbound dedup below: the newest outbound message that
-    // already exists. Anything with a higher id was sent while this message was
-    // being handled (a duplicate webhook's reply, or a manual text).
+    // Baseline for the manual-text guard below: the newest outbound message that already
+    // exists. Anything with a higher id was sent while this message was being handled
+    // (e.g. a manual text from the dashboard), so the AI shouldn't talk over it.
     const lastOutboundId = db.prepare(`
       SELECT COALESCE(MAX(id), 0) AS id FROM sms_messages
       WHERE lead_id = ? AND direction = 'outbound'
     `).get(lead.id).id;
 
-    const history = db.prepare(`
-      SELECT * FROM sms_messages
-      WHERE lead_id = ? ORDER BY created_at ASC
-    `).all(lead.id);
-
-    const messages = history.map(m => ({
-      role: m.direction === 'outbound' ? 'assistant' : 'user',
-      content: m.body
-    }));
-    messages.push({ role: 'user', content });
-
-    const reply = await runSMSAgent(messages, lead);
-    if (!reply) return;
-
-    await handleOwnerPingTag(reply, lead);
-
-    // Store inbound message immediately
+    // Store the inbound text right away so it's on the dashboard even if the AI call fails or is superseded,
+    // and so a following message's history already includes it.
     db.prepare(`INSERT INTO sms_messages (lead_id, direction, body) VALUES (?, ?, ?)`)
       .run(lead.id, 'inbound', content);
 
-    // Random typing delay 8-25 seconds
-    const typingDelay = Math.floor(Math.random() * 17000) + 8000;
-    console.log(`[SMS] Replying to ${lead.lead_name} in ${Math.round(typingDelay/1000)}s`);
+    // This message now owns the reply: cancel whatever was waiting on an earlier one.
+    const prior = pendingReplies.get(lead.id);
+    if (prior) clearTimeout(prior.timer);
+    const gen = (prior?.gen || 0) + 1;
+    const settleTimer = setTimeout(() => {
+      respondToLead({ lead, from, lastOutboundId, gen })
+        .catch(e => console.error('[SMS Reply] Error:', e.message));
+    }, REPLY_SETTLE_MS);
+    pendingReplies.set(lead.id, { gen, timer: settleTimer });
 
-    setTimeout(async () => {
-      // Outbound dedup — skip only if something else was sent to this lead AFTER
-      // this message arrived. (A time window like "last 30s" wrongly counts the
-      // opener when the lead replies right away, silently dropping the AI's reply.)
+  } catch(e) {
+    console.error('[SMS Inbound] Error:', e.message);
+  }
+}
+
+/**
+ * Writes and sends the AI's reply once the lead has stopped texting for a moment.
+ * `gen` identifies which inbound text this reply belongs to; if a newer text arrives at any point
+ * before the send, this reply is dropped and the newer one answers everything instead.
+ */
+async function respondToLead({ lead, from, lastOutboundId, gen }) {
+  const isCurrent = () => pendingReplies.get(lead.id)?.gen === gen;
+
+  const history = db.prepare(`
+    SELECT * FROM sms_messages
+    WHERE lead_id = ? ORDER BY created_at ASC, id ASC
+  `).all(lead.id);
+
+  const messages = history.map(m => ({
+    role: m.direction === 'outbound' ? 'assistant' : 'user',
+    content: m.body
+  }));
+
+  const reply = await runSMSAgent(messages, lead);
+  if (!isCurrent()) {
+    console.log(`[SMS] ${lead.lead_name} sent another message while this reply was being written — dropping it`);
+    return;
+  }
+  if (!reply) {
+    pendingReplies.delete(lead.id);
+    return;
+  }
+
+  // Random typing delay 8-25 seconds
+  const typingDelay = Math.floor(Math.random() * 17000) + 8000;
+  console.log(`[SMS] Replying to ${lead.lead_name} in ${Math.round(typingDelay/1000)}s`);
+
+  const timer = setTimeout(async () => {
+    try {
+      if (!isCurrent()) return;
+      pendingReplies.delete(lead.id);
+
+      // Skip if a human (or anything else) already texted this lead since their message arrived
       const alreadyReplied = db.prepare(`
         SELECT id FROM sms_messages
         WHERE lead_id = ? AND direction = 'outbound' AND id > ?
@@ -771,29 +832,61 @@ async function handleInboundText({ from, content, contactName: providedName }) {
       `).get(lead.id, lastOutboundId);
 
       if (alreadyReplied) {
-        console.log(`[SMS] Already replied to ${lead.lead_name} since this message arrived — skipping duplicate`);
+        console.log(`[SMS] Something else was already sent to ${lead.lead_name} since this message arrived — skipping the AI reply`);
         return;
       }
-      // Extract and send photos first
-      const photoMatches = reply.match(/\[SEND_PHOTO: (\w+)\]/g) || [];
-      for (const match of photoMatches) {
-        const key = match.match(/\[SEND_PHOTO: (\w+)\]/)[1];
-        if (photoMap[key]) {
-          await sendSMSWithPhoto(from, '', photoMap[key]);
-        }
+
+      // Manual mode may have been switched on while the reply was waiting
+      if (db.prepare(`SELECT manual_mode FROM leads WHERE id = ?`).get(lead.id)?.manual_mode === 1) {
+        console.log(`[SMS] Manual mode turned on for ${lead.lead_name} — skipping the AI reply`);
+        return;
       }
 
-      // Send clean text reply (strip photo tags for SMS)
-      const cleanReply = reply
-      .replace(/\[SEND_PHOTO: \w+\]/g, '')
-      .replace(/\[TRIGGER_OWNER_PING\]/g, '')
-      .trim();
+      await handleOwnerPingTag(reply, lead);
 
-      if (cleanReply) await sendSMS(from, cleanReply);
+      // Send each text on its own, a beat apart, like a person typing
+      const texts = splitReply(reply);
+      let delivered = 0;
+      for (let i = 0; i < texts.length; i++) {
+        if (i > 0) await sleep(1500 + Math.random() * 2000);
+        const text = texts[i];
 
-      // Store original reply WITH photo tags so dashboard can render them
-      db.prepare(`INSERT INTO sms_messages (lead_id, direction, body) VALUES (?, ?, ?)`)
-        .run(lead.id, 'outbound', reply.trim());
+        let photoSent = false;
+        const photoMatches = text.match(/\[SEND_PHOTO: (\w+)\]/g) || [];
+        for (const match of photoMatches) {
+          const key = match.match(/\[SEND_PHOTO: (\w+)\]/)[1];
+          if (photoMap[key]) {
+            const photoResult = await sendSMSWithPhoto(from, '', photoMap[key]);
+            if (photoResult?.success) photoSent = true;
+          }
+        }
+
+        // Strip the tags for the SMS itself
+        const cleanText = text
+          .replace(/\[SEND_PHOTO: \w+\]/g, '')
+          .replace(/\[TRIGGER_OWNER_PING\]/g, '')
+          .trim();
+
+        let ok = photoSent;
+        if (cleanText) {
+          const smsResult = await sendSMS(from, cleanText);
+          ok = smsResult?.success !== false;
+        }
+
+        // Never record a message the customer didn't get
+        if (!ok) {
+          console.error(`[SMS] TEXT NOT DELIVERED to ${lead.lead_name} (${from}) — not saved. Check Twilio.`);
+          break;
+        }
+
+        // Store the text WITH its photo tags so the dashboard can render them
+        db.prepare(`INSERT INTO sms_messages (lead_id, direction, body) VALUES (?, ?, ?)`)
+          .run(lead.id, 'outbound', text);
+        delivered++;
+        console.log(`[SMS] Replied to ${lead.lead_name}: "${cleanText}"`);
+      }
+
+      if (!delivered) return;
 
       // Schedule cold nudge — but only if lead isn't already booked/confirmed
       if (lead.shop_id !== 'shopdesk-demo') {
@@ -805,13 +898,11 @@ async function handleInboundText({ from, content, contactName: providedName }) {
           console.log(`[SMS] Skipping cold nudge for ${lead.lead_name} — status is ${freshLead.call_status}`);
         }
       }
-
-      console.log(`[SMS] Replied to ${lead.lead_name}: "${cleanReply}"`);
-    }, typingDelay);
-
-  } catch(e) {
-    console.error('[SMS Inbound] Error:', e.message);
-  }
+    } catch (e) {
+      console.error('[SMS Reply] Error:', e.message);
+    }
+  }, typingDelay);
+  pendingReplies.set(lead.id, { gen, timer });
 }
 
 // ─── ROUTE: TWILIO INBOUND SMS ───────────────────────────────────────────────

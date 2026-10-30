@@ -23,12 +23,12 @@ export async function sendSMS(to, message) {
     );
 
     const data = await resp.json();
-    console.log('[SMS] Sent via Twilio:', data.sid || data.message);
 
     if (data.status === 'queued' || data.sid) {
+      console.log('[SMS] Sent via Twilio:', data.sid);
       return { success: true, data };
     }
-    console.error('[SMS] Twilio error:', data.message);
+    console.error(`[SMS] Twilio send FAILED to ${to}:`, data.message);
     return { success: false, error: data.message };
   } catch(e) {
     console.error('[SMS] Failed:', e.message);
@@ -61,10 +61,16 @@ export async function sendSMSWithPhoto(to, text, mediaUrl) {
     );
 
     const data = await resp.json();
-    console.log('[SMS Photo] Sent via Twilio:', data.sid || data.message);
-    return data;
+
+    if (data.sid) {
+      console.log('[SMS Photo] Sent via Twilio:', data.sid);
+      return { success: true, data };
+    }
+    console.error(`[SMS Photo] Twilio send FAILED to ${to}:`, data.message);
+    return { success: false, error: data.message };
   } catch(e) {
     console.error('[SMS Photo] Failed:', e.message);
+    return { success: false, error: e.message };
   }
 }
 
