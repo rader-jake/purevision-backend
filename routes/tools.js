@@ -8,6 +8,9 @@ import {
   getCentralDateString,
   getCentralHour,
   bookGoogleCalendarEvent,
+  centralToDate,
+  centralDayRange,
+  parseCentral,
 } from "../services/calendar.js";
 import { cancelAllJobsForLead } from "../workers/follow-ups.js";
 
@@ -25,10 +28,9 @@ router.post("/tools/get-availability", async (req, res) => {
     });
   }
   try {
-    const checkDate = new Date(date + "T12:00:00-05:00");
+    const checkDate = centralToDate(date, 12);
     const dateStr   = getCentralDateString(checkDate);
-    const dayStart  = new Date(`${dateStr}T00:00:00-05:00`);
-    const dayEnd    = new Date(`${dateStr}T23:59:59-05:00`);
+    const { start: dayStart, end: dayEnd } = centralDayRange(dateStr);
     const response = await gcal.events.list({
       calendarId:   process.env.GOOGLE_CALENDAR_ID,
       timeMin:      dayStart.toISOString(),
@@ -82,10 +84,9 @@ router.post('/tools/get-epoxy-availability', async (req, res) => {
   }
 
   try {
-    const checkDate = new Date(date + 'T12:00:00-05:00');
+    const checkDate = centralToDate(date, 12);
     const dateStr   = getCentralDateString(checkDate);
-    const dayStart  = new Date(`${dateStr}T00:00:00-05:00`);
-    const dayEnd    = new Date(`${dateStr}T23:59:59-05:00`);
+    const { start: dayStart, end: dayEnd } = centralDayRange(dateStr);
 
     const response = await gcal.events.list({
       calendarId:   process.env.EPOXY_CALENDAR_ID,
@@ -173,7 +174,7 @@ router.post("/tools/book-appointment", async (req, res) => {
 
     await bookGoogleCalendarEvent(leadObj);
 
-    const date = new Date(appointment_time.replace(" ", "T") + ":00-05:00");
+    const date = parseCentral(appointment_time);
     const friendlyTime = date.toLocaleString("en-US", {
       weekday: "long", month: "long", day: "numeric",
       hour: "numeric", minute: "2-digit", timeZone: "America/Chicago",
@@ -202,11 +203,7 @@ router.post('/tools/book-estimate', async (req, res) => {
   }
 
   try {
-    const dateTimeStr = appointment_time.includes('T')
-      ? appointment_time
-      : appointment_time.replace(' ', 'T') + ':00-05:00';
-
-    const appointmentDate = new Date(dateTimeStr);
+    const appointmentDate = parseCentral(appointment_time);
     const endDate = new Date(appointmentDate.getTime() + 60 * 60 * 1000);
 
     await gcal.events.insert({
@@ -313,6 +310,8 @@ router.post("/tools/create-deposit-link", async (req, res) => {
   const quote_total = Number.isFinite(Number(args.quote_total)) && Number(args.quote_total) > 0 ? Math.round(Number(args.quote_total)) : null;
   // Ad-attribution data from the booking page, used later for the Meta Purchase event
   const { fbp, fbc, source_url } = args;
+  // Optional, unchecked-by-default checkbox on the booking page. Only people who tick it get the abandoned-deposit nudge.
+  const smsConsent = args.sms_consent === true || args.sms_consent === 1 || args.sms_consent === "true" ? 1 : 0;
   const clientIp = (req.headers["x-forwarded-for"] || "").split(",")[0].trim() || req.socket?.remoteAddress || null;
   const userAgent = req.headers["user-agent"] || null;
 
@@ -329,7 +328,7 @@ router.post("/tools/create-deposit-link", async (req, res) => {
 
     // 2. Store the order ID + the requested appointment time on the lead so the
     //    Square webhook can find it and book the calendar once payment completes
-    const lead = db.prepare(`SELECT id FROM leads WHERE lead_phone = ? ORDER BY created_at DESC LIMIT 1`).get(lead_phone);
+    const lead = db.prepare(`SELECT id, shop_id FROM leads WHERE lead_phone = ? ORDER BY created_at DESC LIMIT 1`).get(lead_phone);
     if (lead) {
       db.prepare(`
         UPDATE leads
@@ -338,10 +337,25 @@ router.post("/tools/create-deposit-link", async (req, res) => {
             lead_name = COALESCE(?, lead_name),
             lead_vehicle = COALESCE(?, lead_vehicle),
             lead_special = COALESCE(?, lead_special),
-            quote_total = COALESCE(?, quote_total)
+            quote_total = COALESCE(?, quote_total),
+            sms_consent = MAX(COALESCE(sms_consent, 0), ?),
+            sms_consent_at = CASE WHEN ? = 1 THEN datetime('now') ELSE sms_consent_at END,
+            sms_consent_url = CASE WHEN ? = 1 THEN ? ELSE sms_consent_url END
         WHERE id = ?
       `).run(orderId, appointment_time, fbp || null, fbc || null, userAgent, clientIp, source_url || null,
-             lead_name || null, lead_vehicle || null, lead_special || null, quote_total, lead.id);
+             lead_name || null, lead_vehicle || null, lead_special || null, quote_total,
+             smsConsent, smsConsent, smsConsent, source_url || null, lead.id);
+
+      // If they opted in and don't pay within ~3 minutes, text them once (cancelled automatically
+      // when the deposit is paid — see cancelAllJobsForLead in the Square webhook).
+      const consented = db.prepare(`SELECT sms_consent FROM leads WHERE id = ?`).get(lead.id)?.sms_consent === 1;
+      const alreadyNudged = db.prepare(`SELECT id FROM scheduled_jobs WHERE lead_id = ? AND job_type = 'deposit_nudge' LIMIT 1`).get(lead.id);
+      if (consented && !alreadyNudged) {
+        db.prepare(`
+          INSERT INTO scheduled_jobs (lead_id, shop_id, job_type, attempt, send_at)
+          VALUES (?, ?, 'deposit_nudge', 1, datetime('now', '+3 minutes'))
+        `).run(lead.id, lead.shop_id);
+      }
     } else {
       console.warn(`[Create Deposit Link Tool] No lead found for phone ${lead_phone} — deposit link created but not linked to a lead`);
     }
@@ -417,8 +431,7 @@ router.post('/tools/schedule-followup', async (req, res) => {
       return res.json({ response: "I couldn't find that lead to schedule a follow-up.", success: false });
     }
 
-    const dateTimeStr = send_at.includes('T') ? send_at : send_at.replace(' ', 'T') + ':00-05:00';
-    const sendAtDate = new Date(dateTimeStr);
+    const sendAtDate = parseCentral(send_at);
     if (isNaN(sendAtDate.getTime())) {
       throw new Error(`Could not parse send_at: ${send_at}`);
     }

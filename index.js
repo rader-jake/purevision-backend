@@ -9,6 +9,7 @@ import {
   gcal,
   getCentralDateString,
   getCentralHour,
+  centralDayRange,
 } from "./services/calendar.js";
 import { startScheduler } from "./workers/scheduler.js";
 startScheduler();
@@ -61,8 +62,8 @@ app.get("/debug/calendar", async (req, res) => {
   try {
     const now      = new Date();
     const tomorrow = new Date(now.getTime() + 86400000);
-    const dayStart = new Date(`${getCentralDateString(now)}T00:00:00-05:00`);
-    const dayEnd   = new Date(`${getCentralDateString(tomorrow)}T23:59:59-05:00`);
+    const dayStart = centralDayRange(getCentralDateString(now)).start;
+    const dayEnd   = centralDayRange(getCentralDateString(tomorrow)).end;
     const response = await gcal.events.list({
       calendarId:   process.env.GOOGLE_CALENDAR_ID,
       timeMin:      dayStart.toISOString(),

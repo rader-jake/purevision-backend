@@ -5,7 +5,7 @@ import { SHOP_CONFIGS, getShopdeskIndustryLabel } from "../config/shops.js";
 import { sendSMS, sendSMSWithPhoto, handleOwnerPingTag } from "../services/sms.js";
 import { photoMap } from "../services/photo-map.js";
 import { scheduleFollowUpJobs, scheduleColdNudgeJobs, cancelAllJobsForLead } from "../workers/follow-ups.js";
-import { bookGoogleCalendarEvent } from "../services/calendar.js";
+import { bookGoogleCalendarEvent, parseCentral } from "../services/calendar.js";
 import { sendMetaDepositPurchase } from "../services/meta.js";
 import { runSMSAgent } from "../agents/sms-agent.js";
 import { SPLIT_TAG } from "../agents/prompts/index.js";
@@ -114,7 +114,7 @@ router.post("/webhooks/square", async (req, res) => {
     // Send confirmation via SMS — plain text, no links/attachments
     let confirmMsg;
     if (lead.booked_at && !calendarFailed) {
-      const date = new Date(lead.booked_at.replace(" ", "T") + ":00-05:00");
+      const date = parseCentral(lead.booked_at);
       const friendlyTime = date.toLocaleString("en-US", {
         weekday: "long", month: "long", day: "numeric",
         hour: "numeric", minute: "2-digit", timeZone: "America/Chicago",

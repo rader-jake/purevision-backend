@@ -143,3 +143,8 @@ for (const col of ["meta_fbp", "meta_fbc", "meta_user_agent", "meta_ip", "meta_s
 try {
   db.exec(`ALTER TABLE leads ADD COLUMN quote_total INTEGER`);
 } catch(e) { /* already exists */ }
+for (const col of ["sms_consent INTEGER DEFAULT 0", "sms_consent_at TEXT", "sms_consent_url TEXT"]) {
+  try {
+    db.exec(`ALTER TABLE leads ADD COLUMN ${col}`);
+  } catch(e) { /* already exists */ }
+}

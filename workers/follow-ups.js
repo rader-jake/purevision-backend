@@ -14,6 +14,14 @@ export function buildFollowUpMessage(lead, jobType, attempt) {
       : `Hi ${first}, just a gentle follow-up — I know this is a difficult time. If you'd ever like help with your insurance claim, I'm here at no cost to start. Wishing you and your family all the best.`;
   }
 
+  // Booking-page visitor who got to the deposit step but hasn't paid. Plain text, no link
+  // (Blooio blocks links to contacts who haven't replied yet).
+  if (jobType === 'deposit_nudge') {
+    const first = leadFirstName(name);
+    const vehicle = lead.lead_vehicle && lead.lead_vehicle !== 'your vehicle' ? `your ${lead.lead_vehicle}` : 'your vehicle';
+    return `Hey ${first}, this is Jake with Pure Vision Tints. I saw you were looking to make an appointment for ${vehicle}. Let me know if you have any questions about anything!`;
+  }
+
   if (jobType === 'follow_up') {
     // Never replied at all
           if (shopId === 'pure-vision-tints') {

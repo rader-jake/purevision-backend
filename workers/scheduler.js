@@ -53,6 +53,20 @@ export async function processScheduledJobs() {
         }
       }
 
+      if (job.job_type === 'deposit_nudge') {
+        // Paid, or already talking to us → nothing to nudge
+        const hasReplied = db.prepare(`
+          SELECT id FROM sms_messages
+          WHERE lead_id = ? AND direction = 'inbound' LIMIT 1
+        `).get(job.lead_id);
+
+        if (lead.sms_consent !== 1 || lead.deposit_paid === 1 || lead.call_status === 'confirmed' || hasReplied) {
+          db.prepare(`UPDATE scheduled_jobs SET status = 'cancelled' WHERE id = ?`).run(job.id);
+          console.log(`[Worker] Skipping deposit_nudge for ${lead.lead_name} — ${lead.sms_consent !== 1 ? 'no SMS consent' : lead.deposit_paid === 1 ? 'deposit paid' : hasReplied ? 'they replied' : lead.call_status}`);
+          continue;
+        }
+      }
+
       if (job.job_type === 'cold_nudge') {
         // Check last inbound message — if they replied recently skip
         const lastInbound = db.prepare(`
@@ -136,7 +150,7 @@ export async function processScheduledJobs() {
 }
 
 export function startScheduler() {
-  // Run worker every 5 minutes
-  setInterval(processScheduledJobs, 5 * 60 * 1000);
-  console.log('[Worker] Background job processor started — runs every 5 minutes');
+  // Run worker every minute (the ~3-minute deposit nudge needs finer timing than 5 minutes)
+  setInterval(processScheduledJobs, 60 * 1000);
+  console.log('[Worker] Background job processor started — runs every minute');
 }

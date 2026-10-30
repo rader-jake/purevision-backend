@@ -52,11 +52,7 @@ export function minutesUntil8AM(tz = "America/Chicago") {
 }
 
 export async function bookGoogleCalendarEvent(lead) {
-  const dateTimeStr = lead.booked_at.includes("T")
-    ? lead.booked_at
-    : lead.booked_at.replace(" ", "T") + ":00-05:00";
-
-  const appointmentDate = new Date(dateTimeStr);
+  const appointmentDate = parseCentral(lead.booked_at);
 
   if (isNaN(appointmentDate.getTime())) {
     throw new Error(`Could not parse appointment time: ${lead.booked_at}`);
@@ -122,4 +118,22 @@ export function parseAppointmentDescription(description) {
     out[key === "special" ? "service" : key] = m[2].trim();
   }
   return out;
+}
+
+// Parses "YYYY-MM-DD HH:MM" (or with a "T") as Central wall-clock time, DST-safe.
+// Strings that already carry an offset or "Z" are respected as-is.
+// (Replaces the old `... + ":00-05:00"` pattern, which is an hour off after DST ends.)
+export function parseCentral(str) {
+  const s = String(str || "").trim();
+  if (s.includes("T") && /([zZ]|[+-]\d{2}:?\d{2})$/.test(s)) return new Date(s);
+  const m = s.match(/^(\d{4}-\d{2}-\d{2})[ T](\d{1,2}):(\d{2})/);
+  if (!m) return new Date(NaN);
+  return new Date(centralToDate(m[1], Number(m[2])).getTime() + Number(m[3]) * 60000);
+}
+
+// Midnight-to-midnight bounds of a Central calendar day (handles 23h/25h DST days).
+export function centralDayRange(dateStr) {
+  const [y, mo, d] = dateStr.split("-").map(Number);
+  const next = new Date(Date.UTC(y, mo - 1, d + 1)).toISOString().slice(0, 10);
+  return { start: centralToDate(dateStr, 0), end: new Date(centralToDate(next, 0).getTime() - 1000) };
 }
