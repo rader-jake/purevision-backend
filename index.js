@@ -17,6 +17,8 @@ startScheduler();
 app.use('/webhook/sms/inbound', express.raw({ type: 'application/json' }));
 
 // ─── MIDDLEWARE ───────────────────────────────────────────────────────────────
+// Photos arrive base64-encoded in the JSON body, so this route needs a bigger limit than the default.
+app.use('/admin/send-photo', express.json({ limit: '8mb' }));
 app.use(express.json());
 
 app.use(cors({

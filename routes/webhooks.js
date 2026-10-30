@@ -802,7 +802,7 @@ async function respondToLead({ lead, from, lastOutboundId, gen }) {
 
   const messages = history.map(m => ({
     role: m.direction === 'outbound' ? 'assistant' : 'user',
-    content: m.body
+    content: (m.body || '').replace(/\[MEDIA: [a-f0-9]+\]/g, '[sent a photo]')
   }));
 
   const reply = await runSMSAgent(messages, lead);

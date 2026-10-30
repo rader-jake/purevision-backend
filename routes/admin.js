@@ -1,7 +1,8 @@
 import express from "express";
+import crypto from "node:crypto";
 import { db } from "../db/connection.js";
 import { SHOP_CONFIGS } from "../config/shops.js";
-import { sendSMS } from "../services/sms.js";
+import { sendSMS, sendSMSWithPhoto } from "../services/sms.js";
 import {
   gcal, getCentralHour, getCentralDateString,
   centralToDate, buildAppointmentDescription, parseAppointmentDescription,
@@ -511,6 +512,67 @@ router.post('/admin/send-message', async (req, res) => {
     return res.json({ success: true });
   }
   res.status(500).json({ error: 'SMS send failed' });
+});
+
+// ─── ROUTE: SEND A PHOTO (MMS) ────────────────────────────────────────────────
+// Body: { secret, lead_id, image (base64, no data: prefix), caption? }. The image is stored so
+// Twilio can fetch it from /media/:id, then sent as MMS and logged in the conversation as "[MEDIA: id]".
+const MAX_PHOTO_BYTES = 5 * 1024 * 1024; // Twilio's MMS limit
+
+function sniffImageType(buf) {
+  if (buf.length > 3 && buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) return 'image/jpeg';
+  if (buf.length > 4 && buf.subarray(0, 4).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47]))) return 'image/png';
+  if (buf.length > 4 && buf.subarray(0, 4).toString('latin1') === 'GIF8') return 'image/gif';
+  return null;
+}
+
+router.post('/admin/send-photo', async (req, res) => {
+  const { secret, lead_id, image, caption } = req.body;
+  if (secret !== process.env.MANUAL_ENTRY_SECRET) {
+    return res.status(403).json({ error: 'Unauthorized' });
+  }
+  if (typeof image !== 'string' || !image) {
+    return res.status(400).json({ error: 'Photo required' });
+  }
+  const lead = db.prepare(`SELECT * FROM leads WHERE id = ?`).get(lead_id);
+  if (!lead) return res.status(404).json({ error: 'Lead not found' });
+
+  const data = Buffer.from(image.replace(/^data:[^,]*,/, ''), 'base64');
+  if (!data.length) return res.status(400).json({ error: 'Photo required' });
+  if (data.length > MAX_PHOTO_BYTES) return res.status(413).json({ error: 'Photo is too large (5MB max)' });
+  const mime = sniffImageType(data);
+  if (!mime) return res.status(400).json({ error: 'Only JPEG, PNG or GIF photos can be sent' });
+
+  const id = crypto.randomBytes(12).toString('hex');
+  db.prepare(`INSERT INTO media (id, mime, data) VALUES (?, ?, ?)`).run(id, mime, data);
+
+  const base = (process.env.PUBLIC_BASE_URL
+    || `https://${String(req.headers['x-forwarded-host'] || req.headers.host).split(',')[0].trim()}`).replace(/\/$/, '');
+  const text = typeof caption === 'string' ? caption.trim() : '';
+
+  const result = await sendSMSWithPhoto(lead.lead_phone, text, `${base}/media/${id}`);
+  if (!result?.success) {
+    db.prepare(`DELETE FROM media WHERE id = ?`).run(id);
+    return res.status(500).json({ error: result?.error || 'Photo failed to send' });
+  }
+
+  db.prepare(`INSERT INTO sms_messages (lead_id, direction, body) VALUES (?, ?, ?)`)
+    .run(lead_id, 'outbound', `${text ? text + '\n' : ''}[MEDIA: ${id}]`);
+  console.log(`[Admin] Photo sent to ${lead.lead_name} (${Math.round(data.length / 1024)}KB)`);
+  res.json({ success: true, media_id: id });
+});
+
+// Public: Twilio (and the dashboard) fetch sent photos here. The 96-bit random id is the access control.
+router.get('/media/:id', (req, res) => {
+  if (!/^[a-f0-9]{24}$/.test(req.params.id)) return res.status(404).end();
+  const row = db.prepare(`SELECT mime, data FROM media WHERE id = ?`).get(req.params.id);
+  if (!row) return res.status(404).end();
+  res.set({
+    'Content-Type': row.mime,
+    'Cache-Control': 'public, max-age=31536000, immutable',
+    'X-Content-Type-Options': 'nosniff',
+  });
+  res.send(row.data);
 });
 
 // ─── ROUTE: UPDATE LEAD STATUS ────────────────────────────────────────────────

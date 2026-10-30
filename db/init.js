@@ -30,6 +30,16 @@ db.exec(`
   )
 `);
 
+// Photos sent from the dashboard. Twilio fetches them from GET /media/:id; the id is the only secret.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS media (
+    id TEXT PRIMARY KEY,
+    mime TEXT NOT NULL,
+    data BLOB NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )
+`);
+
 db.exec(`
   CREATE TABLE IF NOT EXISTS outreach_leads (
     id TEXT PRIMARY KEY,
