@@ -30,6 +30,24 @@ db.exec(`
   )
 `);
 
+// Append-only proof of opt-in: one row per website submission, with the exact wording that was shown.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS consent_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    lead_id INTEGER,
+    phone TEXT,
+    source TEXT,
+    demo_consent INTEGER,
+    marketing_consent INTEGER,
+    version TEXT,
+    consent_text TEXT,
+    ip TEXT,
+    user_agent TEXT,
+    page_url TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )
+`);
+
 // Photos sent from the dashboard. Twilio fetches them from GET /media/:id; the id is the only secret.
 db.exec(`
   CREATE TABLE IF NOT EXISTS media (
@@ -153,6 +171,12 @@ for (const col of ["meta_fbp", "meta_fbc", "meta_user_agent", "meta_ip", "meta_s
 try {
   db.exec(`ALTER TABLE leads ADD COLUMN quote_total INTEGER`);
 } catch(e) { /* already exists */ }
+// ShopDesk's own demo leads: which opt-in boxes they ticked (1 = the live AI demo texts, 2 = marketing texts) and when.
+for (const col of ["demo_consent INTEGER DEFAULT 0", "demo_consent_at TEXT", "marketing_consent INTEGER DEFAULT 0", "marketing_consent_at TEXT"]) {
+  try {
+    db.exec(`ALTER TABLE leads ADD COLUMN ${col}`);
+  } catch(e) { /* already exists */ }
+}
 for (const col of ["sms_consent INTEGER DEFAULT 0", "sms_consent_at TEXT", "sms_consent_url TEXT"]) {
   try {
     db.exec(`ALTER TABLE leads ADD COLUMN ${col}`);

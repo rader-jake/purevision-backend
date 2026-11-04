@@ -462,11 +462,45 @@ function normalizeShopdeskPhone(raw) {
   return `+${digits}`;
 }
 
+// ─── DEMO OPT-IN RECORD ───────────────────────────────────────────────────────
+// Box 1 (consent_demo) allows the demo conversation; box 2 (consent_marketing) allows marketing follow-ups.
+// Each submission is logged as-is in consent_log; the lead row keeps the current flags and when each was first given.
+function recordDemoConsent(leadId, phone, body, staff) {
+  const demo = 1;
+  const marketing = !staff && body.consent_marketing === true ? 1 : 0;
+  const clip = (v, max) => (typeof v === 'string' ? v.slice(0, max) : null);
+
+  db.prepare(`
+    INSERT INTO consent_log (lead_id, phone, source, demo_consent, marketing_consent, version, consent_text, ip, user_agent, page_url)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(leadId, phone, staff ? 'staff' : 'website', demo, marketing,
+    clip(body.consent_version, 40), clip(body.consent_text, 2000), clip(body.consent_ip, 64),
+    clip(body.consent_user_agent, 300), clip(body.consent_url, 300));
+
+  db.prepare(`
+    UPDATE leads SET
+      demo_consent = 1,
+      demo_consent_at = COALESCE(demo_consent_at, datetime('now')),
+      marketing_consent = MAX(COALESCE(marketing_consent, 0), ?),
+      marketing_consent_at = CASE WHEN ? = 1 AND COALESCE(marketing_consent, 0) = 0 THEN datetime('now') ELSE marketing_consent_at END
+    WHERE id = ?
+  `).run(marketing, marketing, leadId);
+}
+
 // ─── SMS-ONLY WEBHOOK ─────────────────────────────────────────────────────────
 router.post("/webhook/sms-only/:shopId", async (req, res) => {
   const { shopId } = req.params;
   const shop = SHOP_CONFIGS[shopId];
   if (!shop) return res.status(404).json({ error: "Shop not found" });
+
+  // ShopDesk's own demo texts real people, so every signup needs a recorded opt-in. Staff testing their own
+  // number from the dashboard send the admin secret instead of ticking the website's checkbox.
+  const isDemoShop = shopId === 'shopdesk-demo';
+  const staffTrigger = isDemoShop && !!req.body.secret && req.body.secret === process.env.MANUAL_ENTRY_SECRET;
+  if (isDemoShop && !staffTrigger && req.body.consent_demo !== true) {
+    console.log(`[${shopId}] Rejected signup for ${req.body.phone} — demo text consent not given`);
+    return res.status(400).json({ error: "Consent required" });
+  }
 
   const lead = mapLead(req.body, shop.fieldMapping);
   if (!lead.leadPhone) return res.status(400).json({ error: "No phone" });
@@ -481,6 +515,8 @@ router.post("/webhook/sms-only/:shopId", async (req, res) => {
   `).get(shopId, lead.leadPhone);
 
   if (existing) {
+    // A repeat visitor may have ticked the marketing box this time
+    if (isDemoShop) recordDemoConsent(existing.id, lead.leadPhone, req.body, staffTrigger);
     console.log(`[${shopId}] Duplicate lead for ${lead.leadPhone} — skipping`);
     return res.status(200).json({ received: true, leadId: existing.id, duplicate: true });
   }
@@ -491,6 +527,7 @@ router.post("/webhook/sms-only/:shopId", async (req, res) => {
   `).run(shopId, lead.leadName, lead.leadPhone, lead.leadVehicle, lead.leadSpecial);
 
   const leadId = result.lastInsertRowid;
+  if (isDemoShop) recordDemoConsent(leadId, lead.leadPhone, req.body, staffTrigger);
   res.status(200).json({ received: true, leadId });
 
   // Fire leads track every number they could be reached on

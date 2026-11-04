@@ -2,7 +2,7 @@ import { db } from "../db/connection.js";
 import { sendSMS, sendSMSWithPhoto } from "../services/sms.js";
 import { photoMap } from "../services/photo-map.js";
 import { isWithinSendingWindow, minutesUntil8AM } from "../services/calendar.js";
-import { buildFollowUpMessage } from "./follow-ups.js";
+import { buildFollowUpMessage, followUpsAllowed } from "./follow-ups.js";
 import { SHOP_CONFIGS } from "../config/shops.js";
 
 // ─── BACKGROUND JOB WORKER ───────────────────────────────────────────────────
@@ -36,6 +36,13 @@ export async function processScheduledJobs() {
       if (skipStatuses.includes(lead.call_status)) {
         db.prepare(`UPDATE scheduled_jobs SET status = 'cancelled' WHERE id = ?`).run(job.id);
         console.log(`[Worker] Skipping job ${job.id} — lead ${lead.lead_name} is ${lead.call_status}`);
+        continue;
+      }
+
+      // Automated follow-ups need marketing consent for ShopDesk's own demo leads; one the lead asked for is fine
+      if (job.job_type !== 'custom_followup' && !followUpsAllowed(lead.id)) {
+        db.prepare(`UPDATE scheduled_jobs SET status = 'cancelled' WHERE id = ?`).run(job.id);
+        console.log(`[Worker] Skipping job ${job.id} — ${lead.lead_name} has not agreed to marketing texts`);
         continue;
       }
 

@@ -60,8 +60,19 @@ export function buildFollowUpMessage(lead, jobType, attempt) {
   return `Hey ${name}! Just checking back in, still interested?`;
 }
 
+// ShopDesk's own demo leads only get follow-up texts if they ticked the optional marketing-consent box.
+export function followUpsAllowed(leadId) {
+  const lead = db.prepare(`SELECT shop_id, marketing_consent FROM leads WHERE id = ?`).get(leadId);
+  return !(lead?.shop_id === 'shopdesk-demo' && lead.marketing_consent !== 1);
+}
+
 // ─── SCHEDULE JOBS HELPER ─────────────────────────────────────────────────────
 export function scheduleFollowUpJobs(leadId, shopId) {
+  if (!followUpsAllowed(leadId)) {
+    console.log(`[Jobs] Not scheduling follow-up for lead ${leadId} — no marketing consent`);
+    return;
+  }
+
   db.prepare(`
     INSERT INTO scheduled_jobs (lead_id, shop_id, job_type, attempt, send_at)
     VALUES (?, ?, 'follow_up', 1, datetime('now', '+48 hours'))
@@ -71,6 +82,11 @@ export function scheduleFollowUpJobs(leadId, shopId) {
 }
 
 export function scheduleColdNudgeJobs(leadId, shopId) {
+  if (!followUpsAllowed(leadId)) {
+    console.log(`[Jobs] Not scheduling cold nudges for lead ${leadId} — no marketing consent`);
+    return;
+  }
+
   // Cancel any existing cold nudge jobs first to avoid stacking
   db.prepare(`
     UPDATE scheduled_jobs SET status = 'cancelled'
