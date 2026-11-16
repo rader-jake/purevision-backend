@@ -504,7 +504,7 @@ router.post('/admin/send-message', async (req, res) => {
   const lead = db.prepare(`SELECT * FROM leads WHERE id = ?`).get(lead_id);
   if (!lead) return res.status(404).json({ error: 'Lead not found' });
 
-  const result = await sendSMS(lead.lead_phone, message);
+  const result = await sendSMS(lead.lead_phone, message, lead.shop_id);
   if (result?.success !== false) {
     db.prepare(`INSERT INTO sms_messages (lead_id, direction, body) VALUES (?, ?, ?)`)
       .run(lead_id, 'outbound', message);
@@ -550,7 +550,7 @@ router.post('/admin/send-photo', async (req, res) => {
     || `https://${String(req.headers['x-forwarded-host'] || req.headers.host).split(',')[0].trim()}`).replace(/\/$/, '');
   const text = typeof caption === 'string' ? caption.trim() : '';
 
-  const result = await sendSMSWithPhoto(lead.lead_phone, text, `${base}/media/${id}`);
+  const result = await sendSMSWithPhoto(lead.lead_phone, text, `${base}/media/${id}`, lead.shop_id);
   if (!result?.success) {
     db.prepare(`DELETE FROM media WHERE id = ?`).run(id);
     return res.status(500).json({ error: result?.error || 'Photo failed to send' });
@@ -662,7 +662,7 @@ router.post('/admin/send-message-with-link', async (req, res) => {
   try {
     // Phones make a plain URL in the body tappable, so no attachment is needed
     const fullMessage = attachment_url ? `${message}\n${attachment_url}` : message;
-    const result = await sendSMS(lead.lead_phone, fullMessage);
+    const result = await sendSMS(lead.lead_phone, fullMessage, lead.shop_id);
     console.log('[SMS Link] Sent:', result?.success !== false ? 'ok' : result.error);
 
     if (result?.success !== false) {
@@ -750,7 +750,7 @@ router.post('/admin/send-discount', async (req, res) => {
   const lead = db.prepare(`SELECT * FROM leads WHERE id = ?`).get(lead_id);
   if (!lead) return res.status(404).json({ error: 'Lead not found' });
 
-  await sendSMS(lead.lead_phone, message);
+  await sendSMS(lead.lead_phone, message, lead.shop_id);
 
   db.prepare(`INSERT INTO sms_messages (lead_id, direction, body) VALUES (?, ?, ?)`)
     .run(lead.id, 'outbound', message);

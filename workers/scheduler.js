@@ -123,13 +123,13 @@ export async function processScheduledJobs() {
       for (const match of photoMatches) {
         const key = match.match(/\[SEND_PHOTO: (\w+)\]/)[1];
         if (photoMap[key]) {
-          await sendSMSWithPhoto(lead.lead_phone, '', photoMap[key]);
+          await sendSMSWithPhoto(lead.lead_phone, '', photoMap[key], lead.shop_id);
         }
       }
 
       // Send clean text (strip photo tags for SMS)
       const cleanMsg = msg.replace(/\[SEND_PHOTO: \w+\]/g, '').trim();
-      const smsResult = cleanMsg ? await sendSMS(lead.lead_phone, cleanMsg) : { success: true };
+      const smsResult = cleanMsg ? await sendSMS(lead.lead_phone, cleanMsg, lead.shop_id) : { success: true };
 
       if (smsResult?.success !== false) {
         db.prepare(`INSERT INTO sms_messages (lead_id, direction, body) VALUES (?, ?, ?)`)

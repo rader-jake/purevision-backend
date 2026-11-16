@@ -2,7 +2,7 @@ import express from "express";
 import crypto from "node:crypto";
 import { db } from "../db/connection.js";
 import { SHOP_CONFIGS, getShopdeskIndustryLabel } from "../config/shops.js";
-import { sendSMS, sendSMSWithPhoto, handleOwnerPingTag } from "../services/sms.js";
+import { sendSMS, sendSMSWithPhoto, handleOwnerPingTag, isDemoNumber, DEMO_SHOP_ID } from "../services/sms.js";
 import { photoMap } from "../services/photo-map.js";
 import { scheduleFollowUpJobs, scheduleColdNudgeJobs, cancelAllJobsForLead } from "../workers/follow-ups.js";
 import { bookGoogleCalendarEvent, parseCentral } from "../services/calendar.js";
@@ -206,7 +206,7 @@ router.post("/webhook/ghl/:shopId", async (req, res) => {
       let msg = shopId === INTEGRITY_SHOP
         ? buildOpener(lead.leadName, lead.leadVehicle)
         : openers[Math.floor(Math.random() * openers.length)];
-      const smsResult = await sendSMS(lead.leadPhone, msg);
+      const smsResult = await sendSMS(lead.leadPhone, msg, shopId);
       if (smsResult?.success !== false) {
         db.prepare(`INSERT INTO sms_messages (lead_id, direction, body) VALUES (?, ?, ?)`)
           .run(leadId, 'outbound', msg);
@@ -381,7 +381,7 @@ router.post("/webhook/shopdesk-meta", async (req, res) => {
 
           setTimeout(async () => {
             const msg = buildShopdeskOpenerMessage(shopdeskLeadData);
-            const smsResult = await sendSMS(shopdeskLeadData.phone, msg);
+            const smsResult = await sendSMS(shopdeskLeadData.phone, msg, 'shopdesk-demo');
             if (smsResult?.success !== false) {
               db.prepare(`INSERT INTO sms_messages (lead_id, direction, body) VALUES (?, ?, ?)`)
                 .run(leadId, 'outbound', msg);
@@ -563,7 +563,7 @@ router.post("/webhook/sms-only/:shopId", async (req, res) => {
     } else if (shopId === 'backyard-fun-pools') {
       msg = `Hey ${lead.leadName}! 🏊 Thanks for reaching out to Backyard Fun Pools — we actually just wrapped up this beauty! We'd love to help you create something like this for your backyard. Are you thinking full-size or something more compact like our Plunge Pool?`;
       // Send completed pool photo right after the text
-      await sendSMSWithPhoto(lead.leadPhone, '', photoMap['completed_pool']);
+      await sendSMSWithPhoto(lead.leadPhone, '', photoMap['completed_pool'], shopId);
     } else if (shopId === 'apex-window-tinting') {
       msg = `Hey ${lead.leadName}! Thanks for reaching out to Apex Window Tinting. You inquired about our ${lead.leadSpecial || 'Summer Special'} for your ${lead.leadVehicle || 'vehicle'} — were you still interested in getting that done?`;
     } else if (shopId === INTEGRITY_SHOP) {
@@ -584,7 +584,7 @@ router.post("/webhook/sms-only/:shopId", async (req, res) => {
       msg = `Hey ${lead.leadName}! This is Jake with Pure Vision Tints. You reached out about tinting your ${lead.leadVehicle} — were you still interested in getting that done?`;
     }
 
-    const smsResult = await sendSMS(lead.leadPhone, msg);
+    const smsResult = await sendSMS(lead.leadPhone, msg, shopId);
     if (smsResult?.success !== false) {
       db.prepare(`INSERT INTO sms_messages (lead_id, direction, body) VALUES (?, ?, ?)`)
         .run(leadId, 'outbound', msg);
@@ -608,7 +608,7 @@ router.post("/webhook/sms-only/:shopId", async (req, res) => {
 // Integrity lead with many numbers, ...). The reply belongs to the conversation we texted
 // MOST RECENTLY — otherwise an old lead can swallow a reply meant for a newer one and the
 // wrong shop's AI answers. Fire leads are also matched on any of their other numbers.
-function findLeadForInbound(from) {
+function findLeadForInbound(from, shopId = null) {
   const digits = last10(from);
   const byLeadPhone = db.prepare(`
     SELECT * FROM leads
@@ -624,7 +624,7 @@ function findLeadForInbound(from) {
     : [];
 
   const candidates = new Map();
-  for (const l of [...byLeadPhone, ...viaPhones]) candidates.set(l.id, l);
+  for (const l of [...byLeadPhone, ...viaPhones]) if (!shopId || l.shop_id === shopId) candidates.set(l.id, l);
   if (candidates.size <= 1) return [...candidates.values()][0] ?? null;
 
   const lastOutbound = db.prepare(`SELECT COALESCE(MAX(id), 0) AS id FROM sms_messages WHERE lead_id = ? AND direction = 'outbound'`);
@@ -700,17 +700,25 @@ async function handleTwilioRequest(req, res) {
   // A photo with no caption (e.g. fire damage) shouldn't be silently dropped
   const content = (req.body.Body || '').trim() || (Number(req.body.NumMedia) > 0 ? '[Sent a photo or attachment]' : '');
   if (!from || !content) return;
-  return handleInboundText({ from, content, contactName: null });
+  return handleInboundText({ from, to: req.body.To, content, contactName: null });
 }
 
 router.post('/webhook/sms/inbound', express.urlencoded({ extended: false }), handleTwilioRequest);
 
 // Everything that happens once we know who texted and what they said (provider-agnostic).
-async function handleInboundText({ from, content, contactName: providedName }) {
+async function handleInboundText({ from, to, content, contactName: providedName }) {
   try {
     console.log(`[SMS Inbound] From: ${from} — "${content}"`);
 
-    let lead = findLeadForInbound(from);
+    // Texts to the toll-free demo number belong to ShopDesk demo leads, never to a client shop
+    const onDemoNumber = isDemoNumber(to);
+    let lead = findLeadForInbound(from, onDemoNumber ? DEMO_SHOP_ID : null);
+
+    if (!lead && onDemoNumber) {
+      // Not someone we demoed to (we only text people who asked) — don't answer strangers or create a lead
+      console.log(`[SMS] Unknown sender ${from} texted the demo number — ignoring`);
+      return;
+    }
 
     if (!lead) {
       console.log('[SMS] New inbound from unknown number:', from);
@@ -893,7 +901,7 @@ async function respondToLead({ lead, from, lastOutboundId, gen }) {
         for (const match of photoMatches) {
           const key = match.match(/\[SEND_PHOTO: (\w+)\]/)[1];
           if (photoMap[key]) {
-            const photoResult = await sendSMSWithPhoto(from, '', photoMap[key]);
+            const photoResult = await sendSMSWithPhoto(from, '', photoMap[key], lead.shop_id);
             if (photoResult?.success) photoSent = true;
           }
         }
@@ -906,7 +914,7 @@ async function respondToLead({ lead, from, lastOutboundId, gen }) {
 
         let ok = photoSent;
         if (cleanText) {
-          const smsResult = await sendSMS(from, cleanText);
+          const smsResult = await sendSMS(from, cleanText, lead.shop_id);
           ok = smsResult?.success !== false;
         }
 

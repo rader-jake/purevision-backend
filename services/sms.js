@@ -1,9 +1,23 @@
+// ─── SENDER NUMBERS ───────────────────────────────────────────────────────────
+// ShopDesk's own demos go out from the verified toll-free number; every other shop uses the main number.
+export const DEMO_SHOP_ID = 'shopdesk-demo';
+
+export function fromNumberFor(shopId) {
+  return (shopId === DEMO_SHOP_ID && process.env.TWILIO_DEMO_PHONE_NUMBER) || process.env.TWILIO_PHONE_NUMBER;
+}
+
+/** True when Twilio's `To` is the demo number (i.e. someone texted the toll-free line). */
+export function isDemoNumber(to) {
+  const demo = process.env.TWILIO_DEMO_PHONE_NUMBER;
+  return !!demo && !!to && String(to).replace(/\D/g, '').slice(-10) === demo.replace(/\D/g, '').slice(-10);
+}
+
 // ─── SEND SMS HELPER ──────────────────────────────────────────────────────────
-export async function sendSMS(to, message) {
+export async function sendSMS(to, message, shopId) {
   try {
     const accountSid = process.env.TWILIO_ACCOUNT_SID;
     const authToken = process.env.TWILIO_AUTH_TOKEN;
-    const from = process.env.TWILIO_PHONE_NUMBER;
+    const from = fromNumberFor(shopId);
 
     const params = new URLSearchParams();
     params.append('To', to);
@@ -36,11 +50,11 @@ export async function sendSMS(to, message) {
   }
 }
 
-export async function sendSMSWithPhoto(to, text, mediaUrl) {
+export async function sendSMSWithPhoto(to, text, mediaUrl, shopId) {
   try {
     const accountSid = process.env.TWILIO_ACCOUNT_SID;
     const authToken = process.env.TWILIO_AUTH_TOKEN;
-    const from = process.env.TWILIO_PHONE_NUMBER;
+    const from = fromNumberFor(shopId);
 
     const params = new URLSearchParams();
     params.append('To', to);
