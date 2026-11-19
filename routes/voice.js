@@ -314,6 +314,9 @@ router.post("/webhook/voice/owner-status", form, twilioOnly, (req, res) => {
 const sessions = new Map();
 const SESSION_MAX_AGE_MS = 4 * 60 * 60 * 1000;
 const MAX_QUEUE = 200;
+// A lead we already called (power dialer or click-to-call) this recently is skipped, so a second session
+// started right after the first doesn't ring the same people again.
+const REDIAL_GUARD_HOURS = 2;
 const AUTO_ADVANCE_MS = 3000;
 
 const confName = (s) => `dialer-${s.id}`;
@@ -425,14 +428,28 @@ router.post("/admin/voice/dialer/start", adminOnly, async (req, res) => {
   // Build the queue in the order given: this shop's leads, with a valid number, not do-not-call, no repeats
   const seen = new Set();
   const queue = [];
+  let skippedRecent = 0;
   for (const id of leadIds.slice(0, MAX_QUEUE)) {
     const lead = db.prepare(`SELECT * FROM leads WHERE id = ? AND shop_id = ?`).get(Number(id), shopId);
     const phone = normalizePhone(lead?.lead_phone);
     if (!lead || !phone || seen.has(phone) || DO_NOT_CALL.includes(lead.call_status)) continue;
+    const calledRecently = db.prepare(`
+      SELECT 1 FROM call_logs
+      WHERE lead_id = ? AND (notes LIKE 'Power dialer%' OR notes LIKE 'Click-to-call%')
+        AND created_at > datetime('now', ?) LIMIT 1
+    `).get(lead.id, `-${REDIAL_GUARD_HOURS} hours`);
+    if (calledRecently) {
+      skippedRecent++;
+      continue;
+    }
     seen.add(phone);
     queue.push({ lead_id: lead.id, name: lead.lead_name || "Lead", phone });
   }
-  if (!queue.length) return res.status(400).json({ error: "None of those leads can be called" });
+  if (!queue.length) {
+    return res.status(400).json({
+      error: skippedRecent ? `Those leads were all called in the last ${REDIAL_GUARD_HOURS} hours` : "None of those leads can be called",
+    });
+  }
 
   // Forget old finished sessions
   for (const [id, s] of sessions) if (s.state === "finished" && Date.now() - s.startedAt > SESSION_MAX_AGE_MS) sessions.delete(id);
@@ -463,7 +480,7 @@ router.post("/admin/voice/dialer/start", adminOnly, async (req, res) => {
     });
     s.ownerCallSid = call.sid;
     console.log(`[Dialer ${s.id}] Started for ${shopId}: ${queue.length} leads`);
-    res.json({ success: true, session: snapshot(s) });
+    res.json({ success: true, session: snapshot(s), skipped_recent: skippedRecent });
   } catch (e) {
     console.error("[Dialer] Couldn't ring the owner:", e.message);
     s.state = "finished";
