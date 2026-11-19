@@ -10,7 +10,8 @@ router.get("/health", (_, res) => res.json({ status: "ok" }));
 // ─── ROUTE: GET CALL LOGS ────────────────────────────────────────────────────
 router.get('/api/call-logs/:shopId', (req, res) => {
   const { password } = req.query;
-  if (password !== 'purevision2026') return res.status(401).json({ error: 'Unauthorized' });
+  const ok = password === 'purevision2026' || (req.params.shopId === 'shopdesk-demo' && password === 'shopdesk2026');
+  if (!ok) return res.status(401).json({ error: 'Unauthorized' });
 
   const logs = db.prepare(`
     SELECT * FROM call_logs WHERE shop_id = ? ORDER BY created_at DESC

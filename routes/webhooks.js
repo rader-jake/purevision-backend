@@ -1,5 +1,4 @@
 import express from "express";
-import crypto from "node:crypto";
 import { db } from "../db/connection.js";
 import { SHOP_CONFIGS, getShopdeskIndustryLabel } from "../config/shops.js";
 import { sendSMS, sendSMSWithPhoto, handleOwnerPingTag, isDemoNumber, DEMO_SHOP_ID } from "../services/sms.js";
@@ -12,6 +11,8 @@ import { SPLIT_TAG } from "../agents/prompts/index.js";
 import { triggerRetellCall } from "./retell.js";
 import { INTEGRITY_SHOP, buildOpener, detectInboundIntent, last10, normalizePhone } from "../services/fire-text.js";
 import { markDeadIfExhausted, repointLeadPhone } from "../services/fire-leads.js";
+import { isValidTwilioSignature } from "../services/twilio-signature.js";
+import { findLeadForInbound } from "../services/lead-lookup.js";
 
 const router = express.Router();
 
@@ -603,59 +604,9 @@ router.post("/webhook/sms-only/:shopId", async (req, res) => {
   }, delay);
 });
 
-// ─── INBOUND: WHICH LEAD IS THIS REPLY FOR? ─────────────────────────────────
-// The same phone number can belong to several leads (a tint lead from an earlier test, an
-// Integrity lead with many numbers, ...). The reply belongs to the conversation we texted
-// MOST RECENTLY — otherwise an old lead can swallow a reply meant for a newer one and the
-// wrong shop's AI answers. Fire leads are also matched on any of their other numbers.
-function findLeadForInbound(from, shopId = null) {
-  const digits = last10(from);
-  const byLeadPhone = db.prepare(`
-    SELECT * FROM leads
-    WHERE replace(replace(replace(lead_phone, '+', ''), '-', ''), ' ', '')
-      LIKE '%' || replace(replace(replace(?, '+', ''), '-', ''), ' ', '') || '%'
-    ORDER BY created_at DESC LIMIT 10
-  `).all(from);
-  const viaPhones = digits.length === 10
-    ? db.prepare(`
-        SELECT l.* FROM lead_phones p JOIN leads l ON l.id = p.lead_id
-        WHERE p.phone LIKE '%' || ? || '%' LIMIT 10
-      `).all(digits)
-    : [];
-
-  const candidates = new Map();
-  for (const l of [...byLeadPhone, ...viaPhones]) if (!shopId || l.shop_id === shopId) candidates.set(l.id, l);
-  if (candidates.size <= 1) return [...candidates.values()][0] ?? null;
-
-  const lastOutbound = db.prepare(`SELECT COALESCE(MAX(id), 0) AS id FROM sms_messages WHERE lead_id = ? AND direction = 'outbound'`);
-  return [...candidates.values()]
-    .map(l => ({ l, out: lastOutbound.get(l.id).id }))
-    .sort((a, b) => b.out - a.out || String(b.l.created_at).localeCompare(String(a.l.created_at)))[0].l;
-}
 
 // ─── INBOUND SMS WEBHOOK ──────────────────────────────────────────────────────
 // Twilio posts application/x-www-form-urlencoded (From, Body, ...) signed with X-Twilio-Signature.
-
-/** True when X-Twilio-Signature matches HMAC-SHA1(authToken, url + sorted form params). */
-function isValidTwilioSignature(req) {
-  const token = process.env.TWILIO_AUTH_TOKEN;
-  const signature = req.headers['x-twilio-signature'];
-  if (!token || !signature) return false;
-
-  // Twilio signs the exact public URL it called. Behind Railway's proxy that's https + the public host;
-  // set TWILIO_WEBHOOK_BASE_URL (e.g. https://your-app.up.railway.app) if auto-detection ever disagrees.
-  const proto = String(req.headers['x-forwarded-proto'] || req.protocol).split(',')[0].trim();
-  const host = String(req.headers['x-forwarded-host'] || req.headers.host).split(',')[0].trim();
-  const base = (process.env.TWILIO_WEBHOOK_BASE_URL || `${proto}://${host}`).replace(/\/$/, '');
-  const url = base + req.originalUrl;
-
-  const params = req.body || {};
-  const data = url + Object.keys(params).sort().map(k => k + [].concat(params[k]).join('')).join('');
-  const expected = crypto.createHmac('sha1', token).update(data, 'utf8').digest('base64');
-
-  const a = Buffer.from(expected), b = Buffer.from(String(signature));
-  return a.length === b.length && crypto.timingSafeEqual(a, b);
-}
 
 const seenMessageSids = new Set();
 

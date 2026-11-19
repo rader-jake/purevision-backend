@@ -84,6 +84,25 @@ db.prepare(`CREATE TABLE IF NOT EXISTS call_logs (
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 )`).run();
 
+// Voice calls (click-to-call, inbound with missed-call text-back, power dialer).
+// direction: inbound | outbound. `phone` is the other party. Calls are not recorded; only voicemails are kept.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS voice_calls (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    call_sid TEXT,
+    direction TEXT,
+    shop_id TEXT,
+    lead_id INTEGER,
+    phone TEXT,
+    status TEXT,
+    duration INTEGER,
+    textback_sent INTEGER DEFAULT 0,
+    voicemail_url TEXT,
+    voicemail_seconds INTEGER,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )
+`);
+
 // ─── FIRE LEADS (Integrity Claims) ────────────────────────────────────────────
 // One lead can carry up to ~14 phone numbers; we try them one at a time.
 // status: untried | sent | replied | wrong_number | no_response

@@ -45,6 +45,9 @@ app.use(retellRouter);
 import adminRouter from "./routes/admin.js";
 app.use(adminRouter);
 
+import voiceRouter from "./routes/voice.js";
+app.use(voiceRouter);
+
 import fireLeadsRouter from "./routes/fire-leads.js";
 app.use(fireLeadsRouter);
 
