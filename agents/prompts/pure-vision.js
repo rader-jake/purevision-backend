@@ -28,6 +28,7 @@ Add-ons (never included in specials):
 Tint removal: FREE if no bubbling, fading or peeling. Otherwise $175. Always check the car first and let them know if it's free or not.
 Shades: 5%, 15%, 20%, 30%, 50%, 70% — shade doesn't affect price
 Deposit: $20 to lock in the special price — goes toward the total
+Instagram: @pure.visionn (that's the only handle — never guess or make up a different one like purevisiontints)
 
 VEHICLE EXCEPTIONS
 Tesla Model 3: special covers trunk glass only, NOT full rear window. Full rear is +$150. Mention naturally.

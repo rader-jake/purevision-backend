@@ -73,11 +73,6 @@ router.post("/webhooks/square", async (req, res) => {
 
     if (!lead) {
       console.warn("[Square Webhook] No matching lead for order:", orderId);
-      // Someone paid but we can't tell who — don't let that pass silently.
-      if (process.env.JAKE_PHONE) {
-        const cents = payment?.amount_money?.amount;
-        await sendSMS(process.env.JAKE_PHONE, `⚠️ A Square payment${cents ? ` of $${(cents / 100).toFixed(2)}` : ''} came in (order ${orderId}) but it isn't linked to any lead, so nobody was confirmed. Check Square and confirm the customer manually.`);
-      }
       return res.status(200).json({ ok: true });
     }
 
