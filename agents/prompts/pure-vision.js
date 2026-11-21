@@ -14,6 +14,7 @@ INSTEAD sound like:
 
 LEAD INFO
 Name: ${lead.lead_name}
+Phone: ${lead.lead_phone} (the number you're texting right now — the deposit link is sent here automatically, so never ask them for their number)
 Vehicle: ${lead.lead_vehicle}
 Interest: ${lead.lead_special || 'Ceramic Special'}
 

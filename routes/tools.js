@@ -13,8 +13,27 @@ import {
   parseCentral,
 } from "../services/calendar.js";
 import { cancelAllJobsForLead } from "../workers/follow-ups.js";
+import { last10 } from "../services/fire-text.js";
 
 const router = express.Router();
+
+// ─── WHICH LEAD IS A TOOL CALL ABOUT? ────────────────────────────────────────
+// Tool calls come from the AI, which may format the phone differently from how it's stored
+// ("713-408-6089" vs "+17134086089"). Match on lead_id when we have it, otherwise on the last
+// 10 digits, so a link or booking is always tied to the right lead.
+export function findLeadForTool(args) {
+  if (args.lead_id) {
+    const byId = db.prepare(`SELECT * FROM leads WHERE id = ?`).get(args.lead_id);
+    if (byId) return byId;
+  }
+  const digits = last10(args.lead_phone);
+  if (digits.length !== 10) return null;
+  return db.prepare(`
+    SELECT * FROM leads
+    WHERE substr(replace(replace(replace(replace(replace(lead_phone, '+', ''), '-', ''), ' ', ''), '(', ''), ')', ''), -10) = ?
+    ORDER BY created_at DESC LIMIT 1
+  `).get(digits) ?? null;
+}
 
 // ─── ROUTE: GET AVAILABILITY ──────────────────────────────────────────────────
 router.post("/tools/get-availability", async (req, res) => {
@@ -151,15 +170,10 @@ router.post("/tools/book-appointment", async (req, res) => {
   }
 
   try {
-    db.prepare(`
-      UPDATE leads
-      SET booked_at = ?, call_status = 'booked'
-      WHERE lead_phone = ?
-    `).run(appointment_time, lead_phone);
-
-    // Cancel any pending follow-up jobs for this lead
-    const lead = db.prepare(`SELECT id FROM leads WHERE lead_phone = ?`).get(lead_phone);
+    const lead = findLeadForTool(args);
     if (lead) {
+      db.prepare(`UPDATE leads SET booked_at = ?, call_status = 'booked' WHERE id = ?`).run(appointment_time, lead.id);
+      // Cancel any pending follow-up jobs for this lead
       db.prepare(`UPDATE scheduled_jobs SET status = 'cancelled' WHERE lead_id = ? AND status = 'pending'`)
         .run(lead.id);
     }
@@ -247,32 +261,45 @@ router.post("/tools/send-deposit", async (req, res) => {
 
   const raw = req.body;
   const args = raw.args || raw;
-  const { lead_name, lead_phone } = args;
 
-  if (!lead_phone) {
+  const lead = findLeadForTool(args);
+  const phone = lead?.lead_phone || args.lead_phone;
+
+  if (last10(phone).length !== 10) {
+    console.error(`[Deposit Tool] Refusing to send — no valid phone (got ${JSON.stringify(args.lead_phone)}, lead ${lead?.id ?? "not found"})`);
     return res.json({
-      response: "I wasn't able to send the deposit link. Can you confirm your phone number?",
+      response: "I wasn't able to send the deposit link because I don't have a valid phone number for them. Ask them to confirm their number.",
       success: false,
     });
   }
 
   try {
     // 1. Create Square payment link via REST API (no SDK)
-    const { depositUrl, orderId } = await createDepositLink(lead_phone);
+    const { depositUrl, orderId } = await createDepositLink(phone);
 
-        // Store order ID FIRST so Square webhook can match it
-    const lead = db.prepare(`SELECT id FROM leads WHERE lead_phone = ? ORDER BY created_at DESC LIMIT 1`).get(lead_phone);
+    // Store the order ID FIRST so the Square webhook can match the payment to this lead,
+    // whether or not the text below goes through.
     if (lead) {
-      db.prepare(`UPDATE leads SET deposit_sent = 1, square_order_id = ? WHERE id = ?`)
-        .run(orderId, lead.id);
+      db.prepare(`UPDATE leads SET square_order_id = ? WHERE id = ?`).run(orderId, lead.id);
+    } else {
+      console.warn(`[Deposit Tool] No lead found for ${phone} — order ${orderId} is not tied to anyone`);
     }
 
-    // Send text first
-    await sendSMS(lead_phone, `Here's your $20 deposit link to lock in your spot and qualify for the special at Pure Vision Tints — it goes toward your final price 👇`);
-    // Send link alone in a second message — phones auto-detect standalone URLs as clickable
-    await sendSMS(lead_phone, depositUrl);
+    // Send text first, then the link alone in a second message (phones auto-detect standalone URLs)
+    const intro = await sendSMS(phone, `Here's your $20 deposit link to lock in your spot and qualify for the special at Pure Vision Tints — it goes toward your final price 👇`, lead?.shop_id);
+    const link  = await sendSMS(phone, depositUrl, lead?.shop_id);
+
+    if (!link.success) {
+      console.error(`[Deposit Tool] Link text FAILED for lead ${lead?.id ?? "?"}: ${link.error}`);
+      return res.json({
+        response: "The deposit link did NOT reach their phone. Do not tell them it was sent — tell them you'll have the owner send it over shortly.",
+        success: false,
+      });
+    }
+    if (!intro.success) console.warn(`[Deposit Tool] Intro text failed but the link was delivered: ${intro.error}`);
 
     if (lead) {
+      db.prepare(`UPDATE leads SET deposit_sent = 1 WHERE id = ?`).run(lead.id);
       db.prepare(`INSERT INTO sms_messages (lead_id, direction, body) VALUES (?, ?, ?)`)
         .run(lead.id, 'outbound', `Deposit link sent: ${depositUrl}`);
     }
@@ -286,7 +313,7 @@ router.post("/tools/send-deposit", async (req, res) => {
   } catch (err) {
     console.error("[Deposit Tool] Error:", err.message);
     return res.json({
-      response: "I just sent the deposit link to your phone — complete it within 24 hours to lock in your spot!",
+      response: "Something went wrong creating the deposit link, so it was NOT sent. Do not tell them it was sent — tell them you'll have the owner send it over shortly.",
       success: false,
     });
   }
@@ -387,9 +414,7 @@ router.post("/tools/check-deposit-status", async (req, res) => {
     });
   }
 
-  const lead = db.prepare(`
-    SELECT * FROM leads WHERE lead_phone = ? ORDER BY created_at DESC LIMIT 1
-  `).get(lead_phone);
+  const lead = findLeadForTool(args);
 
   if (!lead) {
     return res.json({ status: "unknown", response: "Complete the deposit link within 24 hours to lock in your spot!" });
@@ -426,7 +451,7 @@ router.post('/tools/schedule-followup', async (req, res) => {
   }
 
   try {
-    const lead = db.prepare(`SELECT * FROM leads WHERE lead_phone = ? ORDER BY created_at DESC LIMIT 1`).get(lead_phone);
+    const lead = findLeadForTool(args);
     if (!lead) {
       return res.json({ response: "I couldn't find that lead to schedule a follow-up.", success: false });
     }

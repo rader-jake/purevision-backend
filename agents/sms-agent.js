@@ -211,7 +211,14 @@ export async function runSMSAgent(messages, lead) {
               {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(toolUse.input)
+                // The model has no reliable way to know the lead's number (it once passed "unknown", and
+                // later whatever format the customer typed), so identity always comes from the lead record.
+                body: JSON.stringify({
+                  ...toolUse.input,
+                  lead_id: lead.id,
+                  lead_phone: lead.lead_phone,
+                  lead_name: toolUse.input?.lead_name || lead.lead_name,
+                })
               }
             );
             toolResult = await toolResp.json();
